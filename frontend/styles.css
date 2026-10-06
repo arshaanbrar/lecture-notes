@@ -261,3 +261,33 @@ body.locked #app { display: none; }
 .terms { margin: 0; }
 .terms dt { font-weight: 600; margin-top: 8px; }
 .terms dd { margin: 2px 0 0; color: var(--muted); }
+
+/* Study extras picker */
+.extras { margin: -4px 0 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.extras > summary { cursor: pointer; font-weight: 600; }
+.extras > summary .small { font-weight: 400; }
+.extras > p { margin: 8px 0 10px; }
+.extras-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.extras-grid label {
+  display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+}
+.extras-grid label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.extras-grid input { margin-top: 3px; accent-color: var(--accent); }
+.extras-grid span { display: flex; flex-direction: column; gap: 2px; }
+.extras-grid small { color: var(--muted); font-size: 0.82rem; line-height: 1.3; }
+@media (max-width: 600px) { .extras-grid { grid-template-columns: 1fr; } }
+
+/* Quiz & flashcards */
+.questions .options { list-style: upper-alpha; padding-left: 22px; margin: 4px 0; color: var(--text); }
+.questions .options li { margin: 2px 0; }
+#cards-block h3 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+#cards-block h3 .linkish { font-size: 0.85rem; font-weight: 600; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.card-flip {
+  font: inherit; color: var(--text); text-align: center; cursor: pointer;
+  min-height: 90px; padding: 12px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--bg);
+}
+.card-flip:hover { border-color: var(--accent); }
+.card-flip.flipped { background: var(--accent-soft); border-color: var(--accent); }

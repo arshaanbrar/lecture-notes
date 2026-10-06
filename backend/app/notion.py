@@ -296,6 +296,14 @@ def _rich_text(text: str) -> list[dict]:
     return [{"type": "text", "text": {"content": piece}} for piece in split_text(text, 2000)][:100]
 
 
+def _bold_then(bold: str, rest: str) -> list[dict]:
+    """Rich text: a bold lead-in followed by normal text, e.g. "Term — definition"."""
+    text = [{"type": "text", "text": {"content": bold[:2000]}, "annotations": {"bold": True}}]
+    if rest:
+        text.append({"type": "text", "text": {"content": rest[:2000]}})
+    return text
+
+
 def _block(kind: str, text: str, **extra) -> dict:
     return {"object": "block", "type": kind, kind: {"rich_text": _rich_text(text), **extra}}
 
@@ -318,6 +326,25 @@ def build_blocks(notes: dict, heading: str | None = None) -> list[dict]:
     actions = notes.get("action_items") or []
     blocks += [_block("to_do", a, checked=False) for a in actions] or [_block("paragraph", "None mentioned.")]
 
+    cheat = notes.get("cheat_sheet") or []
+    if cheat:
+        blocks.append(_block("heading_2", "Cheat sheet"))
+        blocks += [_block("bulleted_list_item", line) for line in cheat]
+
+    explained = notes.get("explanations") or []
+    if explained:
+        blocks.append(_block("heading_2", "Explained simply"))
+        for item in explained:
+            blocks.append(_block("paragraph", ""))
+            blocks[-1]["paragraph"]["rich_text"] = _bold_then(item["topic"], f": {item['explanation']}")
+
+    terms = notes.get("key_terms") or []
+    if terms:
+        blocks.append(_block("heading_2", "Key terms"))
+        for item in terms:
+            blocks.append({"object": "block", "type": "bulleted_list_item",
+                           "bulleted_list_item": {"rich_text": _bold_then(item["term"], f" — {item['definition']}")}})
+
     questions = notes.get("practice_questions") or []
     if questions:
         blocks.append(_block("heading_2", "Practice questions"))
@@ -327,14 +354,26 @@ def build_blocks(notes: dict, heading: str | None = None) -> list[dict]:
             toggle["toggle"]["children"] = [_block("paragraph", item["a"])]
             blocks.append(toggle)
 
-    terms = notes.get("key_terms") or []
-    if terms:
-        blocks.append(_block("heading_2", "Key terms"))
-        for item in terms:
-            text = [{"type": "text", "text": {"content": item["term"][:2000]}, "annotations": {"bold": True}}]
-            text.append({"type": "text", "text": {"content": " — "}})
-            text += _rich_text(item["definition"])[:98]
-            blocks.append({"object": "block", "type": "bulleted_list_item", "bulleted_list_item": {"rich_text": text}})
+    quiz = notes.get("quiz") or []
+    if quiz:
+        blocks.append(_block("heading_2", "Quiz"))
+        for n, item in enumerate(quiz, 1):
+            blocks.append(_block("paragraph", ""))
+            blocks[-1]["paragraph"]["rich_text"] = _bold_then(f"{n}. {item['question']}", "")
+            blocks += [_block("paragraph", f"{'ABCD'[i]}) {opt}") for i, opt in enumerate(item["options"])]
+            answer = _block("toggle", "Show answer")
+            correct = f"{'ABCD'[item['answer']]}) {item['options'][item['answer']]}"
+            answer["toggle"]["children"] = [_block("paragraph", "✅ " + correct + (f" — {item['explanation']}" if item.get("explanation") else ""))]
+            blocks.append(answer)
+
+    cards = notes.get("flashcards") or []
+    if cards:
+        blocks.append(_block("heading_2", "Flashcards"))
+        rows = [{"type": "table_row", "table_row": {"cells": [_rich_text("Front"), _rich_text("Back")]}}]
+        rows += [{"type": "table_row", "table_row": {"cells": [_rich_text(c["front"]), _rich_text(c["back"])]}}
+                 for c in cards[:99]]
+        blocks.append({"object": "block", "type": "table",
+                       "table": {"table_width": 2, "has_column_header": True, "children": rows}})
     return blocks
 
 

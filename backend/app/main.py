@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, jobs, notion, placement, slides
+from . import config, jobs, notion, placement, slides, summarize
 from .utils import AppError
 
 logging.basicConfig(level=logging.INFO)
@@ -95,8 +95,14 @@ async def _save_slides(upload: UploadFile | None, workdir: Path) -> Path | None:
     return dest
 
 
+def _extras(value: str) -> list[str]:
+    """The study extras the user ticked, e.g. "practice_questions,flashcards"."""
+    return [e for e in value.split(",") if e in summarize.EXTRAS]
+
+
 @api.post("/jobs/upload")
-async def upload(file: UploadFile = File(...), slides_file: UploadFile | None = File(None)):
+async def upload(file: UploadFile = File(...), slides_file: UploadFile | None = File(None),
+                 extras: str = Form("")):
     workdir = jobs.new_workdir()
     try:
         suffix = Path(file.filename or "").suffix[:10] or ".bin"
@@ -106,19 +112,20 @@ async def upload(file: UploadFile = File(...), slides_file: UploadFile | None = 
     except HTTPException:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
-    return jobs.submit_file(dest, workdir, label=file.filename or "Recording", slides_path=slides_path).public()
+    return jobs.submit_file(dest, workdir, label=file.filename or "Recording", slides_path=slides_path,
+                            extras=_extras(extras)).public()
 
 
 @api.post("/jobs/url")
 async def from_url(url: str = Form(..., min_length=8, max_length=2000, pattern=r"^https?://"),
-                   slides_file: UploadFile | None = File(None)):
+                   slides_file: UploadFile | None = File(None), extras: str = Form("")):
     workdir = jobs.new_workdir()
     try:
         slides_path = await _save_slides(slides_file, workdir)
     except HTTPException:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
-    return jobs.submit_url(url, workdir, slides_path).public()
+    return jobs.submit_url(url, workdir, slides_path, _extras(extras)).public()
 
 
 @api.get("/jobs/{job_id}")
@@ -190,12 +197,33 @@ class Term(BaseModel):
     definition: str
 
 
+class Flashcard(BaseModel):
+    front: str
+    back: str
+
+
+class QuizQuestion(BaseModel):
+    question: str
+    options: list[str]
+    answer: int
+    explanation: str = ""
+
+
+class Explanation(BaseModel):
+    topic: str
+    explanation: str
+
+
 class Notes(BaseModel):
     summary: str = ""
     key_points: list[str] = []
     action_items: list[str] = []
     practice_questions: list[Question] = []
     key_terms: list[Term] = []
+    flashcards: list[Flashcard] = []
+    quiz: list[QuizQuestion] = []
+    cheat_sheet: list[str] = []
+    explanations: list[Explanation] = []
 
 
 class Place(BaseModel):

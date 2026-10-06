@@ -1,8 +1,11 @@
 """Turn a transcript (and optionally the lecture slides) into notes with an LLM on Groq.
 
-Long transcripts are summarised in parts and then merged, so no single request goes over
-Groq's free-tier tokens-per-minute limit. Slides, when given, are used in the single-pass and
-final merge prompts to get terms, formulas and structure right.
+1. Notes: title, summary, key points, action items. Long transcripts are summarised in parts
+   and then merged, so no single request goes over Groq's free-tier tokens-per-minute limit.
+2. Study extras the user picked (practice questions, flashcards, a quiz…), made in one extra
+   request from the finished notes plus excerpts of the transcript.
+
+Slides, when given, are added to the single-pass, merge and extras prompts as context.
 """
 
 import json
@@ -20,16 +23,28 @@ SYSTEM = (
 )
 
 SCHEMA = """Return a JSON object with exactly these keys:
-"title": a short descriptive title, at most 8 words
+"title": a short title saying what the lecture was about, at most 8 words
 "summary": a 3-6 sentence summary of what was covered
 "key_points": an array of the most important points, each one clear sentence (aim for 5-12)
 "action_items": an array of concrete tasks, assignments, deadlines or follow-ups that were mentioned, \
-written as instructions and including who/when if stated. Use an empty array if there are none.
-"practice_questions": an array of 3-6 objects {"q": "...", "a": "..."}: exam-style questions that test \
-understanding of the most important ideas, each with a short correct answer taken from the material. \
-Use an empty array if the recording has no teachable content (e.g. a short admin meeting).
-"key_terms": an array of up to 12 objects {"term": "...", "definition": "..."} for the important terms, \
-concepts or formulas, each defined in one sentence as they were used. Use an empty array if there are none."""
+written as instructions and including who/when if stated. Use an empty array if there are none."""
+
+# Study extras the user can pick before recording. key -> (what to ask for, max items)
+EXTRAS = {
+    "practice_questions": ('an array of 3-6 objects {"q": "...", "a": "..."}: exam-style questions that test '
+                           "understanding of the most important ideas, each with a short correct answer", 8),
+    "key_terms": ('an array of up to 12 objects {"term": "...", "definition": "..."} for the important terms, '
+                  "concepts or formulas, each defined in one sentence as it was used", 15),
+    "flashcards": ('an array of 8-15 objects {"front": "...", "back": "..."}: short flashcards for memorising '
+                   "facts, definitions and formulas (front: a cue or question; back: a brief answer)", 20),
+    "quiz": ('an array of 4-6 objects {"question": "...", "options": ["...", "...", "...", "..."], "answer": <index 0-3 '
+             'of the correct option>, "explanation": "..."}: multiple-choice questions with exactly 4 plausible '
+             "options and one correct answer, plus a one-sentence explanation", 8),
+    "cheat_sheet": ("an array of 5-12 short lines: the must-know formulas, rules, definitions and facts from the "
+                    "lecture, written compactly like a one-page cheat sheet", 15),
+    "explanations": ('an array of 2-4 objects {"topic": "...", "explanation": "..."}: the hardest ideas from the '
+                     "lecture explained simply, in plain language, with an everyday analogy or example if helpful", 5),
+}
 
 SLIDES_NOTE = (
     "\n\nLECTURE SLIDES (extra context from the same lecture). The transcript is the main source; use the "
@@ -38,6 +53,8 @@ SLIDES_NOTE = (
 )
 SINGLE_SLIDES_CHARS = 8000
 MERGE_SLIDES_CHARS = 5000
+EXTRAS_SLIDES_CHARS = 5000
+EXTRAS_TRANSCRIPT_CHARS = 9000
 
 FULL_PROMPT = "Write notes for this transcript.\n\n{schema}\n\nTRANSCRIPT:\n{text}"
 PART_PROMPT = (
@@ -46,9 +63,14 @@ PART_PROMPT = (
 )
 MERGE_PROMPT = (
     "Below are notes written for consecutive parts of one recording, in order. Merge them into "
-    "one set of notes for the whole recording: combine the summaries into one, remove duplicate "
-    "key points, action items and key terms, and keep the 3-6 best practice questions."
-    "\n\n{schema}\n\nPART NOTES (JSON):\n{text}"
+    "one set of notes for the whole recording: combine the summaries into one, and remove duplicate "
+    "key points and action items.\n\n{schema}\n\nPART NOTES (JSON):\n{text}"
+)
+EXTRAS_PROMPT = (
+    "Here are notes from a lecture and excerpts of its transcript. Make study material from them. "
+    "Use only what was covered; never invent facts. If the recording has no teachable content (e.g. a "
+    "short admin meeting), return empty arrays.\n\nReturn a JSON object with exactly these keys:\n{schema}"
+    "\n\nNOTES:\n{notes}\n\nTRANSCRIPT EXCERPTS:\n{transcript}"
 )
 
 
@@ -56,7 +78,21 @@ def _with_slides(prompt: str, slides: str, limit: int) -> str:
     return prompt + SLIDES_NOTE.format(slides=slides[:limit]) if slides.strip() else prompt
 
 
-def make_notes(transcript: str, progress: Progress, slides: str = "") -> dict:
+def make_notes(transcript: str, progress: Progress, slides: str = "", extras: list[str] | None = None,
+               warn: Progress = lambda _: None) -> dict:
+    notes = _base_notes(transcript, progress, slides)
+    wanted = [e for e in (extras or []) if e in EXTRAS]
+    if wanted:
+        progress("Making study extras…")
+        try:
+            notes.update(_make_extras(notes, transcript, slides, wanted, progress))
+        except AppError:  # the notes are fine without extras; don't fail the whole job
+            warn("Couldn't make the study extras this time (the AI was busy). The notes are fine. "
+                 "Try again later if you need the extras.")
+    return notes
+
+
+def _base_notes(transcript: str, progress: Progress, slides: str) -> dict:
     limit = config.SUMMARY_CHUNK_CHARS
     chunks = split_text(transcript, limit)
     if len(chunks) <= 1:
@@ -98,40 +134,91 @@ def _group(items: list[dict], limit: int) -> list[list[dict]]:
     return groups
 
 
-def _ask(prompt: str, progress: Progress) -> dict:
+def _excerpts(transcript: str, limit: int) -> str:
+    """The whole transcript if it fits, otherwise slices from the start, middle and end."""
+    if len(transcript) <= limit:
+        return transcript
+    third = limit // 3
+    mid = len(transcript) // 2 - third // 2
+    return "\n…\n".join([transcript[:third], transcript[mid:mid + third], transcript[-third:]])
+
+
+def _make_extras(notes: dict, transcript: str, slides: str, wanted: list[str], progress: Progress) -> dict:
+    schema = "\n".join(f'"{key}": {EXTRAS[key][0]}' for key in wanted)
+    prompt = EXTRAS_PROMPT.format(schema=schema, notes=json.dumps(notes, ensure_ascii=False),
+                                  transcript=_excerpts(transcript, EXTRAS_TRANSCRIPT_CHARS))
+    data = _ask_json(_with_slides(prompt, slides, EXTRAS_SLIDES_CHARS), progress)
+    return _clean_extras(data, wanted)
+
+
+def _ask_json(prompt: str, progress: Progress) -> dict:
     raw = groq.chat_json(SYSTEM, prompt, progress)
     try:
-        data = json.loads(raw)
+        return json.loads(raw)
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", raw, re.S)
         if not match:
             raise AppError("The AI returned notes in an unexpected format. Try again.")
-        data = json.loads(match.group(0))
-    return _clean(data)
+        return json.loads(match.group(0))
+
+
+def _ask(prompt: str, progress: Progress) -> dict:
+    return _clean(_ask_json(prompt, progress))
+
+
+def _as_list(value) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [str(v).strip() for v in value if str(v).strip()]
 
 
 def _clean(data: dict) -> dict:
-    def as_list(value) -> list[str]:
-        if isinstance(value, str):
-            value = [value]
-        if not isinstance(value, list):
-            return []
-        return [str(v).strip() for v in value if str(v).strip()]
-
-    def as_pairs(value, first: str, second: str, limit: int) -> list[dict]:
-        if not isinstance(value, list):
-            return []
-        pairs = []
-        for item in value:
-            if isinstance(item, dict) and str(item.get(first, "")).strip() and str(item.get(second, "")).strip():
-                pairs.append({first: str(item[first]).strip(), second: str(item[second]).strip()})
-        return pairs[:limit]
-
     return {
         "title": str(data.get("title") or "Notes").strip()[:150],
         "summary": str(data.get("summary") or "").strip(),
-        "key_points": as_list(data.get("key_points")),
-        "action_items": as_list(data.get("action_items")),
-        "practice_questions": as_pairs(data.get("practice_questions"), "q", "a", 8),
-        "key_terms": as_pairs(data.get("key_terms"), "term", "definition", 15),
+        "key_points": _as_list(data.get("key_points")),
+        "action_items": _as_list(data.get("action_items")),
     }
+
+
+def _pairs(value, first: str, second: str, limit: int) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    pairs = []
+    for item in value:
+        if isinstance(item, dict) and str(item.get(first, "")).strip() and str(item.get(second, "")).strip():
+            pairs.append({first: str(item[first]).strip(), second: str(item[second]).strip()})
+    return pairs[:limit]
+
+
+def _quiz(value, limit: int) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    quiz = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        options = _as_list(item.get("options"))[:4]
+        try:
+            answer = int(item.get("answer"))
+        except (TypeError, ValueError):
+            continue
+        question = str(item.get("question") or "").strip()
+        if question and len(options) == 4 and 0 <= answer < 4:
+            quiz.append({"question": question, "options": options, "answer": answer,
+                         "explanation": str(item.get("explanation") or "").strip()})
+    return quiz[:limit]
+
+
+def _clean_extras(data: dict, wanted: list[str]) -> dict:
+    cleaners = {
+        "practice_questions": lambda v, n: _pairs(v, "q", "a", n),
+        "key_terms": lambda v, n: _pairs(v, "term", "definition", n),
+        "flashcards": lambda v, n: _pairs(v, "front", "back", n),
+        "quiz": _quiz,
+        "cheat_sheet": lambda v, n: _as_list(v)[:n],
+        "explanations": lambda v, n: _pairs(v, "topic", "explanation", n),
+    }
+    return {key: cleaners[key](data.get(key), EXTRAS[key][1]) for key in wanted}

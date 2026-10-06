@@ -350,6 +350,32 @@ window.addEventListener("beforeunload", (e) => {
   if (state.rec || state.busy) { e.preventDefault(); e.returnValue = ""; }
 });
 
+// ---------- optional study extras (chosen before recording) ----------
+
+const EXTRAS_KEY = "lecture-notes-extras";
+const extrasBoxes = () => $$('#extras input[type="checkbox"]');
+
+function chosenExtras() {
+  return extrasBoxes().filter((b) => b.checked).map((b) => b.value);
+}
+
+function updateExtrasSummary() {
+  const names = extrasBoxes().filter((b) => b.checked).map((b) => b.parentElement.querySelector("strong").textContent);
+  $("#extras-summary").textContent = names.length ? `· ${names.join(", ")}` : "· none";
+}
+
+(function restoreExtras() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(EXTRAS_KEY)); } catch { /* none saved */ }
+  if (Array.isArray(saved)) extrasBoxes().forEach((b) => (b.checked = saved.includes(b.value)));
+  updateExtrasSummary();
+})();
+
+extrasBoxes().forEach((b) => b.addEventListener("change", () => {
+  try { localStorage.setItem(EXTRAS_KEY, JSON.stringify(chosenExtras())); } catch { /* storage blocked */ }
+  updateExtrasSummary();
+}));
+
 // ---------- optional lecture slides ----------
 
 const SLIDES_MAX_MB = 50;
@@ -405,6 +431,7 @@ $("#url-form").addEventListener("submit", async (e) => {
   try {
     const form = new FormData();
     form.append("url", $("#url-input").value.trim());
+    form.append("extras", chosenExtras().join(","));
     if (state.slides) form.append("slides_file", state.slides);
     const job = await api("/api/jobs/url", { method: "POST", body: form });
     await pollJob(job.id);
@@ -435,6 +462,7 @@ function uploadWithProgress(blob, filename) {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("file", blob, filename);
+    form.append("extras", chosenExtras().join(","));
     if (state.slides) form.append("slides_file", state.slides);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/jobs/upload");
@@ -560,6 +588,73 @@ function fillTerms(terms) {
   $("#terms-block").hidden = !terms.length;
 }
 
+function fillSimpleList(listSel, blockSel, items) {
+  const list = $(listSel);
+  list.replaceChildren(...items.map((text) => Object.assign(document.createElement("li"), { textContent: text })));
+  $(blockSel).hidden = !items.length;
+}
+
+function fillPairs(listSel, blockSel, items, first, second) {
+  const list = $(listSel);
+  list.replaceChildren();
+  for (const item of items) {
+    list.append(Object.assign(document.createElement("dt"), { textContent: item[first] }),
+                Object.assign(document.createElement("dd"), { textContent: item[second] }));
+  }
+  $(blockSel).hidden = !items.length;
+}
+
+function fillQuiz(quiz) {
+  const list = $("#note-quiz");
+  list.replaceChildren();
+  for (const item of quiz) {
+    const li = document.createElement("li");
+    const q = Object.assign(document.createElement("p"), { className: "question", textContent: item.question });
+    const options = document.createElement("ol");
+    options.className = "options";
+    item.options.forEach((opt) => options.append(Object.assign(document.createElement("li"), { textContent: opt })));
+    const answer = document.createElement("details");
+    const summary = Object.assign(document.createElement("summary"), { textContent: "Show answer" });
+    const text = `${"ABCD"[item.answer]}) ${item.options[item.answer]}` + (item.explanation ? ` — ${item.explanation}` : "");
+    answer.append(summary, Object.assign(document.createElement("p"), { textContent: "✅ " + text }));
+    li.append(q, options, answer);
+    list.append(li);
+  }
+  $("#quiz-block").hidden = !quiz.length;
+}
+
+function fillCards(cards) {
+  const box = $("#note-cards");
+  box.replaceChildren();
+  for (const card of cards) {
+    // Click a card to flip it.
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "card-flip";
+    btn.textContent = card.front;
+    btn.title = "Click to flip";
+    btn.addEventListener("click", () => {
+      const flipped = btn.classList.toggle("flipped");
+      btn.textContent = flipped ? card.back : card.front;
+    });
+    box.append(btn);
+  }
+  $("#cards-block").hidden = !cards.length;
+}
+
+$("#copy-cards").addEventListener("click", async () => {
+  const cards = state.result?.notes?.flashcards || [];
+  // Quizlet and Anki both import "front<TAB>back" lines.
+  const text = cards.map((c) => `${c.front.replace(/\s+/g, " ")}\t${c.back.replace(/\s+/g, " ")}`).join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    $("#copy-cards").textContent = "Copied ✓ (paste into Quizlet's or Anki's import)";
+    setTimeout(() => ($("#copy-cards").textContent = "Copy for Quizlet / Anki"), 2500);
+  } catch {
+    showError("Couldn't access the clipboard.");
+  }
+});
+
 function showResults(job) {
   const notes = job.notes || { title: job.label || "Notes", summary: "", key_points: [], action_items: [] };
   state.result = { transcript: job.transcript, notes };
@@ -570,6 +665,10 @@ function showResults(job) {
   fillList($("#note-actions"), notes.action_items || [], "None mentioned.");
   fillQuestions(notes.practice_questions || []);
   fillTerms(notes.key_terms || []);
+  fillSimpleList("#note-cheat", "#cheat-block", notes.cheat_sheet || []);
+  fillPairs("#note-explained", "#explained-block", notes.explanations || [], "topic", "explanation");
+  fillQuiz(notes.quiz || []);
+  fillCards(notes.flashcards || []);
   $("#notes-body").hidden = !job.notes;
   $("#note-transcript").textContent = job.transcript;
   $("#word-count").textContent = `(${job.transcript.split(/\s+/).filter(Boolean).length.toLocaleString()} words)`;
@@ -593,6 +692,26 @@ function toMarkdown() {
   if (notes.key_terms?.length) {
     lines.push("", "## Key terms");
     notes.key_terms.forEach((x) => lines.push(`- **${x.term}**: ${x.definition}`));
+  }
+  if (notes.cheat_sheet?.length) {
+    lines.push("", "## Cheat sheet");
+    notes.cheat_sheet.forEach((x) => lines.push(`- ${x}`));
+  }
+  if (notes.explanations?.length) {
+    lines.push("", "## Explained simply");
+    notes.explanations.forEach((x) => lines.push(`**${x.topic}**: ${x.explanation}`, ""));
+  }
+  if (notes.quiz?.length) {
+    lines.push("", "## Quiz");
+    notes.quiz.forEach((x, i) => {
+      lines.push(`${i + 1}. ${x.question}`);
+      x.options.forEach((o, j) => lines.push(`   ${"ABCD"[j]}) ${o}`));
+      lines.push(`   - Answer: ${"ABCD"[x.answer]}${x.explanation ? ` (${x.explanation})` : ""}`);
+    });
+  }
+  if (notes.flashcards?.length) {
+    lines.push("", "## Flashcards", "| Front | Back |", "| --- | --- |");
+    notes.flashcards.forEach((x) => lines.push(`| ${x.front.replace(/\|/g, "/")} | ${x.back.replace(/\|/g, "/")} |`));
   }
   lines.push("", "## Full transcript", transcript);
   return lines.join("\n");
@@ -842,10 +961,7 @@ $("#notion-send").addEventListener("click", async () => {
     const { url } = await postJson("/api/notion/export", {
       place: { kind: place.kind, target_id: place.target_id, link_to: place.link_to },
       title: $("#note-title").value.trim() || "Lecture notes", // the lecture's title, from its content
-      notes: {
-        summary: notes.summary, key_points: notes.key_points, action_items: notes.action_items,
-        practice_questions: notes.practice_questions || [], key_terms: notes.key_terms || [],
-      },
+      notes, // summary, key points, action items and whichever study extras were made
       transcript,
       local_date: new Date().toLocaleDateString("en-CA"), // YYYY-MM-DD in the user's timezone
     });

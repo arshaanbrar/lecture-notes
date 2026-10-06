@@ -65,27 +65,29 @@ def get(job_id: str) -> Job | None:
     return _jobs.get(job_id)
 
 
-def submit_file(path: Path, workdir: Path, label: str, slides_path: Path | None = None) -> Job:
-    return _submit(label, workdir, path=path, slides_path=slides_path)
+def submit_file(path: Path, workdir: Path, label: str, slides_path: Path | None = None,
+                extras: list[str] | None = None) -> Job:
+    return _submit(label, workdir, path=path, slides_path=slides_path, extras=extras)
 
 
-def submit_url(url: str, workdir: Path, slides_path: Path | None = None) -> Job:
-    return _submit(url, workdir, url=url, slides_path=slides_path)
+def submit_url(url: str, workdir: Path, slides_path: Path | None = None, extras: list[str] | None = None) -> Job:
+    return _submit(url, workdir, url=url, slides_path=slides_path, extras=extras)
 
 
 def _submit(label: str, workdir: Path, path: Path | None = None, url: str | None = None,
-            slides_path: Path | None = None) -> Job:
+            slides_path: Path | None = None, extras: list[str] | None = None) -> Job:
     job = Job(id=uuid.uuid4().hex, label=label)
     with _lock:
         cutoff = time.time() - JOB_TTL_SECONDS
         for old_id in [k for k, j in _jobs.items() if j.created < cutoff]:
             del _jobs[old_id]
         _jobs[job.id] = job
-    _executor.submit(_run, job, workdir, path, url, slides_path)
+    _executor.submit(_run, job, workdir, path, url, slides_path, extras or [])
     return job
 
 
-def _run(job: Job, workdir: Path, path: Path | None, url: str | None, slides_path: Path | None) -> None:
+def _run(job: Job, workdir: Path, path: Path | None, url: str | None, slides_path: Path | None,
+         extras: list[str]) -> None:
     progress = lambda msg: job.update(message=msg)  # noqa: E731
     try:
         if url:
@@ -110,7 +112,10 @@ def _run(job: Job, workdir: Path, path: Path | None, url: str | None, slides_pat
                 job.warning = str(e)
 
         job.update("summarizing", "Writing notes…")
-        job.notes = summarize.make_notes(text, progress, slides_text)
+        def warn(message: str) -> None:
+            job.warning = " ".join(filter(None, [job.warning, message]))
+
+        job.notes = summarize.make_notes(text, progress, slides_text, extras, warn)
         job.update("done", "Done")
     except AppError as e:
         job.error = str(e)
