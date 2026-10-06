@@ -1,0 +1,20 @@
+# Runs the tests on every push. In Render, set Auto-Deploy to "After CI checks pass"
+# so a change that breaks the tests never goes live.
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest -q
+      - name: Check the website's JavaScript for syntax errors
+        run: for f in frontend/*.js; do node --check "$f"; done
