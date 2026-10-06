@@ -2,8 +2,7 @@
 
 The user picks who it's for and which class; this finds the places that make sense in that
 person's Notion (a lectures table linked to the class, the page where their other lectures for
-the class live, the class page itself…), and the AI picks the best one and a title that matches
-how they name their lectures.
+the class live, the class page itself…), and the AI picks the best one.
 """
 
 import json
@@ -189,14 +188,14 @@ def plan(person_id: str, class_id: str | None, class_text: str, note_title: str,
         add("page", default, 0, f"New page in {default['title']}", [])
 
     ranked = sorted(candidates.values(), key=lambda c: -c["score"])[:MAX_CANDIDATES]
-    best, title, reason = _choose(ranked, person["title"], class_title, note_title, summary)
+    best, reason = _choose(ranked, person["title"], class_title, note_title, summary)
     for c in ranked:
         c.pop("score")
-    return {"candidates": ranked, "best": best, "title": title, "reason": reason}
+    return {"candidates": ranked, "best": best, "reason": reason}
 
 
 def _choose(ranked: list[dict], person: str, class_title: str, note_title: str, summary: str):
-    """Ask the AI to pick the best place and a title in the person's naming style."""
+    """Ask the AI to pick the best place."""
     listing = "\n".join(
         f"{i}. {c['label']} — at: {c['where']}"
         + (f" — existing titles there: {'; '.join(c['examples'])}" if c["examples"] else "")
@@ -210,23 +209,19 @@ def _choose(ranked: list[dict], person: str, class_title: str, note_title: str, 
         "- A lectures/topics table linked to the class is usually best.\n"
         "- Never pick a place that belongs to a different class.\n"
         "- Only pick 'Add to your latest … lecture' if the notes are clearly a continuation of it.\n"
-        "Then write a page title that follows the naming style of the existing titles at that place "
-        "(e.g. if they're numbered 'csc lec 3', use the next number; keep their prefixes and casing). "
-        "If there are no existing titles, use a short descriptive title.\n"
-        'Reply as JSON: {"choice": <number>, "title": "<title>", "reason": "<one short sentence>"}'
+        'Reply as JSON: {"choice": <number>, "reason": "<one short sentence>"}'
     )
     try:
         data = json.loads(groq.chat_json(
             "You file lecture notes into the right place in a student's Notion. Reply with JSON only.",
             prompt, lambda _: None))
         choice = int(data.get("choice", 0))
-        title = str(data.get("title") or "").strip()[:150]
         reason = str(data.get("reason") or "").strip()[:200]
     except (AppError, ValueError, TypeError, json.JSONDecodeError):
-        choice, title, reason = 0, "", ""
+        choice, reason = 0, ""
     if not 0 <= choice < len(ranked):
         choice = 0
-    return choice, title or note_title or "Lecture notes", reason
+    return choice, reason
 
 
 def send(place: dict, title: str, notes: dict, transcript: str, day: str | None) -> str:

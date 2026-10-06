@@ -581,7 +581,6 @@ async function makePlan() {
     const plan = await postJson("/api/notion/plan", body);
     if (seq !== sendState.planSeq) return; // a newer choice replaced this one
     sendState.plan = plan;
-    $("#plan-title").value = plan.title;
     $("#plan-alt").replaceChildren(...plan.candidates.map((c, i) => new Option(c.label, String(i))));
     $("#plan-alt").value = String(plan.best);
     showPlace(plan.best, plan.reason);
@@ -627,7 +626,7 @@ $("#notion-send").addEventListener("click", async () => {
     const { notes, transcript } = state.result;
     const { url } = await postJson("/api/notion/export", {
       place: { kind: place.kind, target_id: place.target_id, link_to: place.link_to },
-      title: $("#plan-title").value.trim() || $("#note-title").value.trim() || "Lecture notes",
+      title: $("#note-title").value.trim() || "Lecture notes", // the lecture's title, from its content
       notes: { summary: notes.summary, key_points: notes.key_points, action_items: notes.action_items },
       transcript,
       local_date: new Date().toLocaleDateString("en-CA"), // YYYY-MM-DD in the user's timezone

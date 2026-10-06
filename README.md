@@ -171,10 +171,10 @@ After the notes are written, the **Send to Notion** box asks two things:
 The AI then suggests where the notes should go, preferring where that person's lectures for the class already live:
 
 - a **lectures/topics table linked to the class**: a new entry, with the class link, a `lecture` type and today's date filled in when the table has those columns;
-- the page where their **other lecture pages** for the class are, titled in the same style (e.g. `csc lec 3` → `csc lec 4`);
+- the page where their **other lecture pages** for the class are;
 - **inside the class page**, or adding to their **latest lecture**.
 
-Check the suggestion and the page title, then click **Send to Notion**, or open **Put it somewhere else** to choose another of the suggested places. Nothing is written until you click Send.
+The Notion page gets the lecture's title (the one at the top of the notes, which you can edit). Check the suggestion, then click **Send to Notion**, or open **Put it somewhere else** to choose another of the suggested places. Nothing is written until you click Send.
 
 ### Upload / link
 
