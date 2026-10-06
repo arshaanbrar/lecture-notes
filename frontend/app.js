@@ -622,7 +622,7 @@ $("#start-over").addEventListener("click", () => {
 const WHO_KEY = "lecture-notes-who";
 const LAST_CLASS_KEY = "lecture-notes-last-class"; // { personId: classId }
 const OTHER = "__other";
-const sendState = { people: null, plan: null, planSeq: 0, classSeq: 0 };
+const sendState = { people: null, plan: null, planSeq: 0, classSeq: 0, guessSeq: 0 };
 
 function recall(key) {
   try { return localStorage.getItem(key) || ""; } catch { return ""; }
@@ -645,7 +645,32 @@ function postJson(path, body) {
 async function startNotionFlow() {
   $("#notion-result").textContent = "";
   if (!sendState.people) await loadPeople();
-  else if ($("#who").value) await loadClasses(); // new notes: guess the class again
+  await guessOwner();
+}
+
+// The AI compares what the lecture is about with everyone's classes (and lecture pages) to
+// guess whose lecture it is and which class. Both stay editable.
+async function guessOwner() {
+  const seq = ++sendState.guessSeq;
+  const hint = $("#who-hint");
+  hint.textContent = "🤖 Figuring out whose lecture this is…";
+  $("#class-step").hidden = true;
+  $("#plan-step").hidden = true;
+  let guess = {};
+  try {
+    guess = await postJson("/api/notion/guess", { ...noteContext(), usual_person_id: recall(WHO_KEY) });
+  } catch { /* fall back to the saved name */ }
+  if (seq !== sendState.guessSeq) return; // the user picked a name themselves meanwhile
+
+  const known = sendState.people?.some((p) => p.id === guess.person_id);
+  if (known) {
+    $("#who").value = guess.person_id;
+    hint.textContent = "🤖 Guessed from the lecture. Change it if that's wrong.";
+    await loadClasses({ preferClass: guess.class_id, preferText: guess.class_name });
+  } else {
+    hint.textContent = "";
+    await loadClasses();
+  }
 }
 
 async function loadPeople(refresh = false) {
@@ -662,10 +687,11 @@ async function loadPeople(refresh = false) {
     who.replaceChildren(new Option("Couldn't load names", ""));
     showError(err.message);
   }
-  await loadClasses();
 }
 
-async function loadClasses() {
+// `prefer` comes from the AI's guess: a class to select, or a class name to type in.
+async function loadClasses(prefer = {}) {
+  const guessed = !!(prefer.preferClass || prefer.preferText);
   const personId = $("#who").value;
   const seq = ++sendState.classSeq;
   $("#class-step").hidden = !personId;
@@ -679,7 +705,9 @@ async function loadClasses() {
   hint.textContent = "";
   let classes = [], guess = null;
   try {
-    ({ classes, guess } = await postJson("/api/notion/classes", { person_id: personId, ...noteContext() }));
+    // When the class was already guessed together with the person, don't guess it again.
+    const context = guessed ? {} : noteContext();
+    ({ classes, guess } = await postJson("/api/notion/classes", { person_id: personId, ...context }));
   } catch (err) {
     showError(err.message);
   }
@@ -701,7 +729,14 @@ async function loadClasses() {
   select.disabled = false;
 
   const last = lastClasses()[personId];
-  if (guess) {
+  if (prefer.preferClass && classes.some((c) => c.id === prefer.preferClass)) {
+    select.value = prefer.preferClass;
+    hint.textContent = "🤖 Guessed from the lecture. Change it if that's wrong.";
+  } else if (prefer.preferText) {
+    select.value = OTHER;
+    $("#class-other").value = prefer.preferText;
+    hint.textContent = "🤖 Guessed from their lecture pages. Change it if that's wrong.";
+  } else if (guess) {
     select.value = guess;
     hint.textContent = "🤖 Guessed from the lecture. Change it if that's wrong.";
   } else if (classes.some((c) => c.id === last)) {
@@ -775,6 +810,8 @@ function showPlace(index, reason) {
 }
 
 $("#who").addEventListener("change", () => {
+  sendState.guessSeq++; // the user chose; ignore any guess still on its way
+  $("#who-hint").textContent = "";
   remember(WHO_KEY, $("#who").value);
   loadClasses();
 });
@@ -787,7 +824,10 @@ $("#class-other").addEventListener("keydown", (e) => {
 });
 $("#class-other").addEventListener("change", makePlan);
 $("#plan-alt").addEventListener("change", () => showPlace(Number($("#plan-alt").value), ""));
-$("#notion-refresh").addEventListener("click", () => loadPeople(true));
+$("#notion-refresh").addEventListener("click", async () => {
+  await loadPeople(true);
+  await loadClasses();
+});
 
 $("#notion-send").addEventListener("click", async () => {
   if (!state.result || !sendState.plan) return;

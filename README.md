@@ -165,7 +165,9 @@ For system audio, the browser shows a share dialog. **Pick a tab, window or scre
 
 ### Sending to Notion
 
-After the notes are written, the **Send to Notion** box asks two things:
+After the notes are written, the AI guesses **whose lecture it is and which class**: it compares what the lecture was about with everyone's classes (and, for people without a class list, the titles of their lecture pages). Both answers are pre-filled with a "🤖 Guessed from the lecture" note, and you can change either one. If two people take the same class, the name this device usually sends for breaks the tie.
+
+The **Send to Notion** box asks two things:
 
 1. **Who is it for?** A name from the top level of the shared Notion (one page per person). Each device remembers the last choice.
 2. **Which class?** The site lists the classes it finds in that person's Notion, e.g. the entries of their *Courses*, *Classes* or *Domains* table. The AI pre-selects the class that matches the lecture. If no class list is found, pick **Something else** and type the class name (e.g. `csc108`).

@@ -8,6 +8,7 @@ the class live, the class page itself…), and the AI picks the best one.
 import json
 import math
 import re
+import time
 from datetime import date
 
 from . import groq, notion
@@ -66,9 +67,22 @@ def people() -> list[dict]:
             for n in sorted(roots, key=lambda n: n["title"].lower())]
 
 
+CLASSES_CACHE_SECONDS = 600
+_classes_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
 def classes(person_id: str, note_title: str = "", summary: str = "") -> dict:
-    """The classes in this person's Notion (entries of their Courses/Classes table), plus the
-    AI's guess at which one this lecture is for."""
+    """The classes in this person's Notion, plus the AI's guess at which one this lecture is for."""
+    found = find_classes(person_id)
+    return {"classes": found, "guess": _guess_class(found, note_title, summary)}
+
+
+def find_classes(person_id: str) -> list[dict]:
+    """Entries of the person's Courses/Classes table(s). Cached for a few minutes."""
+    key = notion.normalize_id(person_id)
+    cached = _classes_cache.get(key)
+    if cached and time.time() - cached[0] < CLASSES_CACHE_SECONDS:
+        return cached[1]
     nodes = notion.page_tree()
     by_id = _by_id(nodes)
     tables = [n for n in nodes if n["type"] == "database" and _inside(by_id, n, person_id)]
@@ -88,8 +102,71 @@ def classes(person_id: str, note_title: str = "", summary: str = "") -> dict:
             found.append({"id": entry["id"], "title": entry["title"], "icon": entry["icon"], "group": name})
         if len(found) >= 120:
             break
+    _classes_cache[key] = (time.time(), found)
+    return found
 
-    return {"classes": found, "guess": _guess_class(found, note_title, summary)}
+
+def forget_cached() -> None:
+    _classes_cache.clear()
+
+
+def guess_owner(note_title: str, summary: str, usual_person_id: str = "") -> dict:
+    """Guess whose lecture this is (and which class) by comparing what it's about with every
+    person's classes, or, for people without a class list, the titles of their lecture pages."""
+    everyone = people()
+    if not everyone or not (note_title or summary):
+        return {"person_id": None}
+    nodes = notion.page_tree()
+    by_id = _by_id(nodes)
+
+    sections, class_index = [], []
+    for p_num, person in enumerate(everyone):
+        lines = [f"P{p_num}. {person['title']}"]
+        for c in find_classes(person["id"])[:40]:
+            lines.append(f"   C{len(class_index)}: {c['title']}")
+            class_index.append((p_num, c))
+        lectures = [n["title"] for n in nodes if n["type"] == "page" and LECTURE_WORDS.search(n["title"])
+                    and _inside(by_id, n, person["id"])][:12]
+        if lectures:
+            lines.append("   their lecture pages: " + "; ".join(lectures))
+        if len(lines) == 1:
+            lines.append("   (no classes or lecture pages found)")
+        sections.append("\n".join(lines))
+
+    usual = next((f"P{i}. {p['title']}" for i, p in enumerate(everyone)
+                  if notion.same_id(p["id"], usual_person_id)), "")
+    prompt = (
+        f"Lecture title: {note_title}\nLecture summary: {summary[:1500]}\n\n"
+        "These students share one Notion. Each has classes (C…) and/or lecture pages:\n"
+        + "\n".join(sections) + "\n\n"
+        + (f"This device usually sends notes for {usual}. Use that only to break a tie when more than "
+           "one person has a matching class.\n" if usual else "")
+        + "Whose lecture is this most likely, and for which class? Match the subject of the lecture to "
+        "class names and course codes, and to the topics of their existing lecture pages. If the best "
+        "person has no listed class that fits, give a short class name in class_name instead (e.g. a "
+        "course code from their lecture pages like \"csc\").\n"
+        'Reply as JSON: {"person": "P<number>", "class": "C<number>" or null, "class_name": "<text>" or null, '
+        '"confident": true|false}'
+    )
+    try:
+        data = json.loads(groq.chat_json(
+            "You figure out which student and class a lecture recording belongs to. Reply with JSON only.",
+            prompt, lambda _: None))
+        p_num = int(str(data.get("person", "")).lstrip("Pp"))
+    except (AppError, ValueError, TypeError, json.JSONDecodeError):
+        return {"person_id": None}
+    if not 0 <= p_num < len(everyone) or data.get("confident") is False:
+        return {"person_id": None}
+
+    class_id = None
+    try:
+        c_num = int(str(data.get("class") or "").lstrip("Cc"))
+        if 0 <= c_num < len(class_index) and class_index[c_num][0] == p_num:
+            class_id = class_index[c_num][1]["id"]
+    except ValueError:
+        pass
+    class_name = "" if class_id else str(data.get("class_name") or "").strip()[:80]
+    return {"person_id": everyone[p_num]["id"], "class_id": class_id, "class_name": class_name}
 
 
 def _guess_class(found: list[dict], note_title: str, summary: str) -> str | None:

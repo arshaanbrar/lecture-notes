@@ -137,12 +137,22 @@ def job_status(job_id: str):
 def notion_people(refresh: bool = False):
     if refresh:
         notion.forget_cached()
+        placement.forget_cached()
     return {"people": placement.people()}
 
 
 class NoteContext(BaseModel):
     note_title: str = Field(default="", max_length=300)
     summary: str = Field(default="", max_length=5000)
+
+
+class GuessBody(NoteContext):
+    usual_person_id: str = Field(default="", max_length=64)
+
+
+@api.post("/notion/guess")
+def notion_guess(body: GuessBody):
+    return placement.guess_owner(body.note_title, body.summary, body.usual_person_id)
 
 
 class ClassesBody(NoteContext):
