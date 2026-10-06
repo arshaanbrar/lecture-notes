@@ -300,7 +300,8 @@ def _block(kind: str, text: str, **extra) -> dict:
     return {"object": "block", "type": kind, kind: {"rich_text": _rich_text(text), **extra}}
 
 
-def build_blocks(notes: dict, transcript: str, heading: str | None = None) -> list[dict]:
+def build_blocks(notes: dict, heading: str | None = None) -> list[dict]:
+    """The notes as Notion blocks (the transcript is added separately, inside a toggle)."""
     blocks: list[dict] = []
     if heading:
         blocks.append(_block("heading_1", heading))
@@ -316,28 +317,38 @@ def build_blocks(notes: dict, transcript: str, heading: str | None = None) -> li
     blocks.append(_block("heading_2", "Action items"))
     actions = notes.get("action_items") or []
     blocks += [_block("to_do", a, checked=False) for a in actions] or [_block("paragraph", "None mentioned.")]
-
-    if transcript.strip():
-        blocks.append({"object": "block", "type": "divider", "divider": {}})
-        blocks.append(_block("heading_2", "Full transcript"))
-        blocks += [_block("paragraph", para) for para in split_text(transcript, 1500)]
     return blocks
 
 
-def _append(page_id: str, blocks: list[dict]) -> None:
+def _append(block_id: str, blocks: list[dict]) -> list[dict]:
+    """Add blocks under `block_id`, 100 at a time. Returns the blocks Notion created."""
+    created = []
     for i in range(0, len(blocks), MAX_BLOCKS_PER_REQUEST):
-        _request("PATCH", f"/blocks/{page_id}/children", {"children": blocks[i:i + MAX_BLOCKS_PER_REQUEST]})
+        data = _request("PATCH", f"/blocks/{block_id}/children", {"children": blocks[i:i + MAX_BLOCKS_PER_REQUEST]})
+        created += data.get("results", [])
+    return created
+
+
+def _write_notes(page_id: str, notes: dict, transcript: str, heading: str | None = None) -> None:
+    """Write the notes, then the transcript inside a collapsed "Full transcript" toggle heading."""
+    blocks = build_blocks(notes, heading)
+    words = len(transcript.split())
+    if words:
+        blocks.append({"object": "block", "type": "divider", "divider": {}})
+        blocks.append(_block("heading_2", f"Full transcript ({words:,} words)", is_toggleable=True))
+    created = _append(page_id, blocks)
+    if words and created:
+        toggle_id = created[-1]["id"]
+        _append(toggle_id, [_block("paragraph", para) for para in split_text(transcript, 1500)])
 
 
 def _create(parent: dict, properties: dict, notes: dict, transcript: str) -> str:
-    blocks = build_blocks(notes, transcript)
     page = _request("POST", "/pages", {
         "parent": parent,
         "icon": {"type": "emoji", "emoji": "📝"},
         "properties": properties,
-        "children": blocks[:MAX_BLOCKS_PER_REQUEST],
     })
-    _append(page["id"], blocks[MAX_BLOCKS_PER_REQUEST:])
+    _write_notes(page["id"], notes, transcript)
     forget_cached()
     return page.get("url", "")
 
@@ -374,5 +385,5 @@ def append_to_page(page_id: str, title: str, notes: dict, transcript: str) -> st
     page_id = normalize_id(page_id)
     if not page_id:
         raise AppError("No Notion page to add the notes to.")
-    _append(page_id, build_blocks(notes, transcript, heading=title))
+    _write_notes(page_id, notes, transcript, heading=title)
     return _request("GET", f"/pages/{page_id}").get("url", "")
