@@ -82,25 +82,32 @@ def transcribe_file(path: Path, progress: Progress) -> str:
 _working_model: str | None = None
 
 
-def chat_json(system: str, user: str, progress: Progress) -> str:
-    """Ask for a JSON reply, using the first model in GROQ_MODELS this account can access."""
+def _chat(messages: list[dict], progress: Progress, json_mode: bool, temperature: float) -> str:
+    """Run a chat completion with the first model in GROQ_MODELS this account can access."""
     global _working_model
     models = [_working_model] if _working_model else config.GROQ_MODELS
     errors = []
     for model in models:
-        body = {
-            "model": model,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"},
-        }
+        body = {"model": model, "messages": messages, "temperature": temperature}
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
         try:
             data = _post("/chat/completions", progress, lambda: {"json": body})
         except ModelUnavailable as e:
             errors.append(f"{model}: {e}")
             continue
         _working_model = model
-        return data["choices"][0]["message"]["content"]
+        return data["choices"][0]["message"]["content"] or ""
     _working_model = None
     raise AppError("None of the Groq models are available to your account ("
                    + "; ".join(errors) + "). Set GROQ_MODEL to one listed at https://console.groq.com/docs/models.")
+
+
+def chat_json(system: str, user: str, progress: Progress) -> str:
+    """Ask for a JSON reply."""
+    return _chat([{"role": "system", "content": system}, {"role": "user", "content": user}], progress, True, 0.2)
+
+
+def chat_text(system: str, messages: list[dict], progress: Progress = lambda _: None) -> str:
+    """A normal conversational reply. `messages` alternate user/assistant turns."""
+    return _chat([{"role": "system", "content": system}, *messages], progress, False, 0.4).strip()

@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, jobs, notion, placement, slides, summarize
+from . import assistant, config, jobs, notion, placement, slides, summarize
 from .utils import AppError
 
 logging.basicConfig(level=logging.INFO)
@@ -245,6 +245,52 @@ def notion_export(body: ExportBody):
     url = placement.send(body.place.model_dump(), body.title, body.notes.model_dump(),
                          body.transcript, body.local_date)
     return {"url": url}
+
+
+# ---------- study helper chat ----------
+
+SNIPPET_MAX_MB = 25
+
+
+@api.post("/assistant/transcribe")
+async def assistant_transcribe(audio_file: UploadFile = File(...), skip_seconds: float = Form(0, ge=0, le=10)):
+    """Transcribe the audio recorded since the last question (used mid-lecture)."""
+    workdir = jobs.new_workdir()
+    try:
+        dest = workdir / ("snippet" + (Path(audio_file.filename or "").suffix[:10] or ".webm"))
+        await _save(audio_file, dest, SNIPPET_MAX_MB, "audio")
+        try:
+            text = assistant.transcribe_snippet(dest, workdir, skip_seconds)
+        except AppError:
+            text = ""  # too short or silent: nothing new to add
+        return {"text": text}
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=8000)
+
+
+class ChatContext(BaseModel):
+    live: bool = False
+    title: str = ""
+    summary: str = ""
+    key_points: list[str] = []
+    key_terms: list[Term] = []
+    transcript: str = Field(default="", max_length=400_000)
+
+
+class ChatBody(BaseModel):
+    messages: list[ChatMessage] = Field(max_length=40)
+    context: ChatContext = ChatContext()
+
+
+@api.post("/assistant/chat")
+def assistant_chat(body: ChatBody):
+    context = body.context.model_dump()
+    return {"reply": assistant.answer([m.model_dump() for m in body.messages], context)}
 
 
 app.include_router(public)

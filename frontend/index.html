@@ -235,7 +235,25 @@
 
   <footer class="site-footer">Built by Arshaan</footer>
 
+  <button id="chat-fab" class="chat-fab" type="button" aria-label="Open the study helper">💬 <span>Ask AI</span></button>
+  <section id="chat-panel" class="chat-panel" role="dialog" aria-label="Study helper" hidden>
+    <header class="chat-head">
+      <div>
+        <strong>Study helper</strong>
+        <p id="chat-context" class="muted small"></p>
+      </div>
+      <button type="button" class="icon-btn" id="chat-close" aria-label="Close">×</button>
+    </header>
+    <div id="chat-log" class="chat-log" aria-live="polite"></div>
+    <div id="chat-suggestions" class="chat-suggestions"></div>
+    <form id="chat-form" class="chat-form">
+      <textarea id="chat-input" rows="1" placeholder="Ask about the lecture…" aria-label="Your question"></textarea>
+      <button class="btn primary" type="submit">Send</button>
+    </form>
+  </section>
+
   <script src="store.js"></script>
   <script src="app.js"></script>
+  <script src="chat.js"></script>
 </body>
 </html>

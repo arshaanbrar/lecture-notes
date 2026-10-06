@@ -29,10 +29,12 @@ def duration(path: Path) -> float:
         return 0.0
 
 
-def normalize(src: Path, workdir: Path) -> Path:
-    """Convert any audio/video into small 16 kHz mono MP3 — all Whisper needs (~14 MB per hour)."""
+def normalize(src: Path, workdir: Path, skip_seconds: float = 0) -> Path:
+    """Convert any audio/video into small 16 kHz mono MP3 — all Whisper needs (~14 MB per hour).
+    `skip_seconds` drops audio from the start (e.g. a repeated header piece)."""
     out = workdir / "audio.mp3"
-    _run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+    skip = ["-ss", f"{skip_seconds:.2f}"] if skip_seconds > 0 else []
+    _run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src), *skip,
           "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k", str(out)])
     if duration(out) < 0.5:
         raise AppError("The audio is empty or too short to transcribe.")

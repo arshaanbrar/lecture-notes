@@ -192,6 +192,16 @@ Every lecture gets a summary, key points, **key terms** and action items. Above 
 
 They're made in one extra AI step after the notes, using only the ones you tick. All of them go to Notion too: questions and quiz answers as toggles, flashcards as a Front/Back table. If the AI is too busy to make them, the notes still arrive and a message says the extras were skipped.
 
+### Study helper chat
+
+The **💬 Ask AI** button in the bottom-right corner opens a chat you can use any time:
+
+- **During a lecture**, while recording: ask things like "explain the last few minutes simply". Each question transcribes only the audio recorded since the previous question, so the helper knows what was just said, and recording carries on.
+- **After a lecture**: it uses the notes and the full transcript.
+- **With no lecture open**: it's a general study tutor.
+
+It answers from the lecture first and says when it adds something the lecture didn't cover. Opening a different lecture starts a fresh conversation.
+
 ### Lecture slides (optional)
 
 Under the recording, and on the Upload tab, there's **📎 Add lecture slides**. It's optional. If you add the prof's slides (PDF or PowerPoint `.pptx`, up to 50 MB), the AI uses them to get names, terms and formulas right and to fix words the transcript misheard. Skip it and everything works the same. Slides that are only images (no selectable text) can't be read; the notes are then made from the recording alone.
