@@ -201,8 +201,7 @@ input:focus, select:focus, button:focus-visible, .btn:focus-visible {
 }
 .segmented label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .segmented label:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
-#existing-picker { margin-bottom: 14px; }
-#existing-picker select { margin-top: 8px; }
+#page-picker { margin-bottom: 14px; }
 #notion-result { margin-bottom: 0; }
 #notion-result a { color: var(--accent); font-weight: 600; }
 

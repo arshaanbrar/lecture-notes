@@ -55,7 +55,7 @@ def get_config():
     return {
         "password_required": bool(config.APP_PASSWORD),
         "notion_configured": notion.is_configured(),
-        "notion_can_create": notion.can_create_pages(),
+        "notion_default_parent": bool(notion.parent_page_id()),
         "transcribe_backend": config.TRANSCRIBE_BACKEND,
         "max_upload_mb": config.MAX_UPLOAD_MB,
     }
@@ -130,7 +130,7 @@ class ExportBody(BaseModel):
 def notion_export(body: ExportBody):
     notes = body.notes.model_dump()
     if body.mode == "new":
-        url = notion.create_page(body.title, notes, body.transcript)
+        url = notion.create_page(body.title, notes, body.transcript, body.page_id)
     else:
         url = notion.append_to_page(body.page_id or "", body.title, notes, body.transcript)
     return {"url": url}

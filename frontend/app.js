@@ -409,7 +409,7 @@ function showResults(job) {
   $("#results").hidden = false;
   $("#notion-card").hidden = false;
   $("#notion-result").textContent = "";
-  if (state.config?.notion_configured && notionMode() === "existing" && !tree.loaded) loadTree();
+  if (state.config?.notion_configured && !tree.loaded) loadTree();
   $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -464,6 +464,11 @@ function openNode(id) {
   tree.path = id ? pathTo(id) : [];
   $("#page-search").value = "";
   renderTree();
+}
+
+function canSend() {
+  if (selectedPageId()) return true;
+  return notionMode() === "new" && !tree.path.length && !!state.config?.notion_default_parent;
 }
 
 function selectedPageId() {
@@ -541,15 +546,22 @@ function renderTree() {
   }
 
   const target = $("#page-target");
+  const creating = notionMode() === "new";
   const id = tree.path[tree.path.length - 1];
-  if (!id) target.textContent = "Open the page you want to add notes to.";
-  else if (tree.nodes.get(id).type === "database") target.textContent = "This is a database. Open a page inside it.";
-  else {
-    const b = document.createElement("strong");
-    b.textContent = tree.path.map((p) => tree.nodes.get(p).title).join(" › ");
-    target.replaceChildren("Notes will be added to: ", b);
+  if (!id) {
+    target.textContent = creating
+      ? (state.config?.notion_default_parent
+        ? "The new page will go in your default notes page, or open a page to create it there."
+        : "Open the page you want the new page created inside.")
+      : "Open the page you want to add notes to.";
+  } else if (tree.nodes.get(id).type === "database") {
+    target.textContent = "This is a database. Open a page inside it.";
+  } else {
+    const where = document.createElement("strong");
+    where.textContent = tree.path.map((p) => tree.nodes.get(p).title).join(" › ");
+    target.replaceChildren(creating ? "New page will be created inside: " : "Notes will be added to: ", where);
   }
-  $("#notion-send").disabled = notionMode() === "existing" && !selectedPageId();
+  $("#notion-send").disabled = !canSend();
 }
 
 async function loadTree(refresh = false) {
@@ -574,10 +586,8 @@ async function loadTree(refresh = false) {
 }
 
 $$('input[name="notion-mode"]').forEach((r) => r.addEventListener("change", () => {
-  const existing = notionMode() === "existing";
-  $("#existing-picker").hidden = !existing;
-  $("#notion-send").disabled = existing && !selectedPageId();
-  if (existing && !tree.loaded) loadTree();
+  if (tree.loaded) renderTree();
+  else loadTree();
 }));
 
 $("#page-search").addEventListener("input", renderTree);
@@ -588,7 +598,7 @@ $("#notion-send").addEventListener("click", async () => {
   clearError();
   const mode = notionMode();
   const pageId = selectedPageId();
-  if (mode === "existing" && !pageId) { showError("Open the Notion page you want to add notes to."); return; }
+  if (!canSend()) { showError("Open a Notion page in the list first."); return; }
 
   const btn = $("#notion-send");
   btn.disabled = true;
@@ -613,10 +623,11 @@ $("#notion-send").addEventListener("click", async () => {
     a.rel = "noopener";
     a.textContent = "Open in Notion ↗";
     $("#notion-result").replaceChildren("✅ Saved to Notion. ", a);
+    if (mode === "new") loadTree(true); // show the page we just created
   } catch (err) {
     showError(err.message);
   } finally {
-    btn.disabled = false;
+    btn.disabled = !canSend();
     btn.textContent = "Send to Notion";
   }
 });
@@ -649,13 +660,6 @@ async function init() {
   $("#file-limit").textContent = `Audio or video, up to ${cfg.max_upload_mb} MB`;
   $("#notion-off").hidden = cfg.notion_configured;
   $("#notion-on").hidden = !cfg.notion_configured;
-  if (cfg.notion_configured && !cfg.notion_can_create) {
-    const newRadio = $('input[name="notion-mode"][value="new"]');
-    newRadio.disabled = true;
-    newRadio.parentElement.title = "Set NOTION_PARENT_PAGE_ID to enable creating new pages.";
-    $('input[name="notion-mode"][value="existing"]').checked = true;
-    $("#existing-picker").hidden = false;
-  }
   if (cfg.password_required && !getPassword()) lock();
 }
 

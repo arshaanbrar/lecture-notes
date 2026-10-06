@@ -18,11 +18,8 @@ def is_configured() -> bool:
     return bool(config.NOTION_TOKEN)
 
 
-def can_create_pages() -> bool:
-    return bool(config.NOTION_TOKEN and parent_page_id())
-
-
 def parent_page_id() -> str:
+    """Optional default parent for new pages when the user hasn't picked one."""
     return normalize_id(config.NOTION_PARENT_PAGE_ID)
 
 
@@ -180,10 +177,11 @@ def _append(page_id: str, blocks: list[dict]) -> None:
         _request("PATCH", f"/blocks/{page_id}/children", {"children": blocks[i:i + MAX_BLOCKS_PER_REQUEST]})
 
 
-def create_page(title: str, notes: dict, transcript: str) -> str:
-    parent = parent_page_id()
+def create_page(title: str, notes: dict, transcript: str, parent_id: str | None = None) -> str:
+    """Create a new page inside `parent_id` (or the default parent page)."""
+    parent = normalize_id(parent_id or "") or parent_page_id()
     if not parent:
-        raise AppError("NOTION_PARENT_PAGE_ID isn't set, so new pages can't be created (see README).")
+        raise AppError("Open the Notion page you want the new page created inside.")
     blocks = build_blocks(notes, transcript)
     page = _request("POST", "/pages", {
         "parent": {"page_id": parent},
@@ -192,6 +190,7 @@ def create_page(title: str, notes: dict, transcript: str) -> str:
         "children": blocks[:MAX_BLOCKS_PER_REQUEST],
     })
     _append(page["id"], blocks[MAX_BLOCKS_PER_REQUEST:])
+    _tree_cache["nodes"] = None  # so the new page shows up in the picker straight away
     return page.get("url", "")
 
 
