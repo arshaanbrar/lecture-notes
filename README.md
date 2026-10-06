@@ -211,7 +211,7 @@ Under the recording, and on the Upload tab, there's **📎 Add lecture slides**.
 ### Upload / link
 
 - **Files:** any audio or video format ffmpeg reads (mp3, m4a, wav, mp4, mov, webm, mkv, …), up to `MAX_UPLOAD_MB` (default 300 MB).
-- **Documents:** drop a PDF, Word (`.docx`), PowerPoint (`.pptx`) or text file into the same box and the app summarises it like a lecture, with the same notes, study extras and Send to Notion. It skips transcription, and the document's text goes in a collapsed **Full text** section. Scanned PDFs made of images have no text to read. Documents over ~100 pages are cut off with a warning.
+- **Documents:** drop a PDF, Word (`.docx`), PowerPoint (`.pptx`) or text file into the same box and the app summarises it like a lecture, with the same notes, study extras and Send to Notion. It skips transcription, and the document's text goes in a collapsed **Full text** section. Scanned PDFs and photos of notes or handouts (`.jpg`, `.png`) work too: pages without selectable text are read with OCR. That's **Tesseract**, free and open source, installed in the Docker image, so no key is needed. OCR takes several seconds a page on Render's free server, so the first 40 scanned pages are read, with a warning if there are more. Documents over ~100 pages are cut off with a warning. Scanned slides work the same way, up to 20 pages.
 - **Links:** YouTube, Vimeo, Loom, Google Drive files shared publicly, direct `.mp3`/`.mp4` links, and [many other sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). The link must be public. YouTube sometimes blocks downloads from cloud servers. If a YouTube link fails on Render, download the video yourself and upload the file instead.
 
 ---

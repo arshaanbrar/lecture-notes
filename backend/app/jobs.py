@@ -100,7 +100,7 @@ def _run(job: Job, workdir: Path, path: Path | None, url: str | None, slides_pat
             # A document (PDF, Word…): no audio to transcribe, its text is what gets summarised.
             job.source = "document"
             job.update("reading", "Reading the document…")
-            text = documents.full_text(path, warn)
+            text = documents.full_text(path, warn, progress)
         else:
             if url:
                 job.update("downloading", "Downloading audio from the link…")
@@ -119,7 +119,7 @@ def _run(job: Job, workdir: Path, path: Path | None, url: str | None, slides_pat
         if slides_path:
             job.update("summarizing", "Reading the slides…")
             try:
-                slides_text = slides.extract_text(slides_path)
+                slides_text = slides.extract_text(slides_path, progress)
             except AppError as e:  # slides are optional: carry on without them
                 job.warning = str(e)
 

@@ -34,7 +34,7 @@ def test_bad_or_empty_documents_give_friendly_errors(tmp_path):
     with pytest.raises(AppError, match="Couldn't open"):
         documents.full_text(tmp_path / "broken.docx")
     (tmp_path / "blank.txt").write_text("   ")
-    with pytest.raises(AppError, match="no readable text"):
+    with pytest.raises(AppError, match="Couldn't find any text"):
         documents.full_text(tmp_path / "blank.txt")
 
 
@@ -43,3 +43,47 @@ def test_very_long_documents_are_cut_with_a_warning(tmp_path):
     warnings = []
     text = documents.full_text(tmp_path / "book.txt", warnings.append)
     assert len(text) == documents.MAX_CHARS and "very long" in warnings[0]
+
+
+needs_ocr = pytest.mark.skipif(not documents.ocr_available(), reason="tesseract/pdftoppm not installed")
+
+
+def make_scan(path, *lines):
+    """A 'scanned' PDF: each page is only a picture of text, with no text layer."""
+    from PIL import Image, ImageDraw, ImageFont
+    font = ImageFont.load_default(size=40)
+    pages = []
+    for line in lines:
+        img = Image.new("RGB", (1240, 1754), "white")
+        ImageDraw.Draw(img).text((100, 200), line, fill="black", font=font)
+        pages.append(img)
+    pages[0].save(path, save_all=True, append_images=pages[1:], resolution=150)
+    return pages
+
+
+@needs_ocr
+def test_scanned_pdfs_and_photos_are_read_with_ocr(tmp_path):
+    pages = make_scan(tmp_path / "scan.pdf", "Week 4: Durkheim and anomie", "Social facts shape how people act")
+    progress = []
+    text = documents.full_text(tmp_path / "scan.pdf", progress=progress.append)
+    assert "Durkheim and anomie" in text and "Social facts shape" in text
+    assert progress == ["Reading scanned page 1 of 2…", "Reading scanned page 2 of 2…"]
+    pages[1].save(tmp_path / "photo.jpg")
+    assert "Social facts shape" in documents.full_text(tmp_path / "photo.jpg")
+
+
+@needs_ocr
+def test_only_so_many_scanned_pages_are_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(documents, "OCR_MAX_PAGES", 1)
+    make_scan(tmp_path / "scan.pdf", "First page here", "Second page here")
+    warnings = []
+    text = documents.full_text(tmp_path / "scan.pdf", warnings.append)
+    assert "First page" in text and "Second page" not in text
+    assert "2 scanned pages; only the first 1" in warnings[0]
+
+
+def test_scans_without_ocr_installed_give_a_friendly_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(documents, "ocr_available", lambda: False)
+    make_scan(tmp_path / "scan.pdf", "Hidden text")
+    with pytest.raises(AppError, match="Couldn't find any text"):
+        documents.full_text(tmp_path / "scan.pdf")

@@ -498,7 +498,7 @@ function setFile(file) {
   setBusy(state.busy);
 }
 
-const DOCUMENT_TYPES = /\.(pdf|docx|pptx|txt|md)$/i;
+const DOCUMENT_TYPES = /\.(pdf|docx|pptx|txt|md|png|jpe?g)$/i;
 const isDocument = (name) => DOCUMENT_TYPES.test(name || "");
 
 $("#file-input").addEventListener("change", (e) => setFile(e.target.files[0]));

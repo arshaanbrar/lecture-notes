@@ -1,8 +1,9 @@
 FROM python:3.12-slim
 
 # ffmpeg converts/splits audio and lets yt-dlp extract audio from video links.
+# tesseract + poppler-utils (pdftoppm) read the text in scanned PDFs and photos (OCR).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg \
+ && apt-get install -y --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng poppler-utils \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
