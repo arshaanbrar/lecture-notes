@@ -1,0 +1,240 @@
+"""Work out where in Notion a recorded lecture should go.
+
+The user picks who it's for and which class; this finds the places that make sense in that
+person's Notion (a lectures table linked to the class, the page where their other lectures for
+the class live, the class page itself…), and the AI picks the best one and a title that matches
+how they name their lectures.
+"""
+
+import json
+import math
+import re
+from datetime import date
+
+from . import groq, notion
+from .utils import AppError
+
+# Tables whose entries are classes ("Courses", "Classes", or e.g. a template's "Domains").
+COURSE_TABLE = re.compile(r"course|class|subject|module|domain|unit|semester", re.I)
+# Pages/tables that hold lectures or class notes.
+LECTURE_WORDS = re.compile(r"\blec\b|\blecs?\s*\d|lecture|\bweek\s*\d|\btut|\blab\b|class notes|\bnotes?\b|topics?", re.I)
+STOP_WORDS = {"for", "and", "the", "with", "intro", "introduction", "applications", "to", "of", "in", "a", "an"}
+MAX_CANDIDATES = 6
+
+
+def _by_id(nodes: list[dict]) -> dict[str, dict]:
+    return {notion.normalize_id(n["id"]): n for n in nodes}
+
+
+def _node(by_id: dict, node_id: str | None) -> dict | None:
+    return by_id.get(notion.normalize_id(node_id or ""))
+
+
+def _ancestors(by_id: dict, node: dict) -> list[dict]:
+    chain, cur = [], _node(by_id, node.get("parent"))
+    while cur and len(chain) < 30:
+        chain.append(cur)
+        cur = _node(by_id, cur.get("parent"))
+    return chain
+
+
+def _inside(by_id: dict, node: dict, person_id: str) -> bool:
+    return any(notion.same_id(a["id"], person_id) for a in _ancestors(by_id, node))
+
+
+def _path(by_id: dict, node: dict) -> str:
+    return " › ".join(a["title"] for a in reversed(_ancestors(by_id, node)))
+
+
+def _tokens(text: str) -> set[str]:
+    words = re.findall(r"[a-z]+|\d{3,4}[a-z]?\d*", text.lower())
+    return {w for w in words if (len(w) >= 3 or w.isdigit()) and w not in STOP_WORDS}
+
+
+def _matches_class(title: str, tokens: set[str]) -> bool:
+    if not tokens:
+        return False
+    hits = len(tokens & _tokens(title))
+    return hits >= max(1, math.ceil(len(tokens) / 2)) or (hits and len(tokens) <= 2)
+
+
+# ---------- who / which class ----------
+
+def people() -> list[dict]:
+    nodes = notion.page_tree()
+    roots = [n for n in nodes if n["root"] and n["type"] == "page"]
+    return [{"id": n["id"], "title": n["title"], "icon": n["icon"]}
+            for n in sorted(roots, key=lambda n: n["title"].lower())]
+
+
+def classes(person_id: str, note_title: str = "", summary: str = "") -> dict:
+    """The classes in this person's Notion (entries of their Courses/Classes table), plus the
+    AI's guess at which one this lecture is for."""
+    nodes = notion.page_tree()
+    by_id = _by_id(nodes)
+    tables = [n for n in nodes if n["type"] == "database" and _inside(by_id, n, person_id)]
+
+    found, seen = [], set()
+    for table in tables[:25]:
+        name = table["title"]
+        if notion.is_generic_title(name):
+            name = notion.data_source_label(table["id"]) or name
+        if not COURSE_TABLE.search(name):
+            continue
+        for entry in notion.table_entries(table["id"])[:80]:
+            key = notion.normalize_id(entry["id"])
+            if key in seen or notion.is_generic_title(entry["title"]):
+                continue
+            seen.add(key)
+            found.append({"id": entry["id"], "title": entry["title"], "icon": entry["icon"], "group": name})
+        if len(found) >= 120:
+            break
+
+    return {"classes": found, "guess": _guess_class(found, note_title, summary)}
+
+
+def _guess_class(found: list[dict], note_title: str, summary: str) -> str | None:
+    if not found or not (note_title or summary):
+        return None
+    listing = "\n".join(f"{i}. {c['title']}" for i, c in enumerate(found))
+    prompt = (f"Lecture title: {note_title}\nLecture summary: {summary[:1500]}\n\nThe student's classes:\n{listing}\n\n"
+              'Which class is this lecture most likely from? Reply as JSON: {"index": <number>, '
+              '"confident": true|false}. Use -1 if none of them fits.')
+    try:
+        data = json.loads(groq.chat_json(
+            "You match lecture notes to the student's class. Reply with JSON only.", prompt, lambda _: None))
+        index = int(data.get("index", -1))
+    except (AppError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return found[index]["id"] if 0 <= index < len(found) and data.get("confident", True) else None
+
+
+# ---------- where should it go ----------
+
+def plan(person_id: str, class_id: str | None, class_text: str, note_title: str, summary: str) -> dict:
+    nodes = notion.page_tree()
+    by_id = _by_id(nodes)
+    person = _node(by_id, person_id)
+    if not person:
+        raise AppError("Couldn't find that person's page in Notion. Try refreshing.")
+    mine = [n for n in nodes if _inside(by_id, n, person_id)]
+
+    class_node = _node(by_id, class_id)
+    class_title = (class_node["title"] if class_node else "") or class_text.strip()
+    tokens = _tokens(class_title)
+    course_table = notion.page_parent_table(class_id) if class_id else None
+
+    candidates: dict[tuple, dict] = {}
+
+    def add(kind: str, target: dict, score: float, label: str, examples: list[str], link_to: str | None = None):
+        key = (kind, notion.normalize_id(target["id"]))
+        if key not in candidates or candidates[key]["score"] < score:
+            candidates[key] = {
+                "kind": kind, "target_id": target["id"], "link_to": link_to, "score": score, "label": label,
+                "where": " › ".join(filter(None, [_path(by_id, target), target["title"]])),
+                "examples": examples[:6],
+            }
+
+    # 1. A lectures table that links to the class (e.g. Topics, with a "domain" column -> Domains).
+    if class_id and course_table:
+        tables = [n for n in mine if n["type"] == "database" and LECTURE_WORDS.search(n["title"])]
+        for table in tables[:10]:
+            info = notion.table_info(table["id"])
+            column = info and notion.link_column(info, course_table)
+            if not column:
+                continue
+            existing = notion.linked_entries(info, column, class_id)
+            extras = ", ".join(filter(None, [f"{info['kind'][0]}: {info['kind'][2]}" if info["kind"] else "",
+                                              "dated today" if info["date_prop"] else ""]))
+            label = f"New lecture in {info['title']}, linked to {class_title}" + (f" ({extras})" if extras else "")
+            add("entry", table, 100 + len(existing), label, [e["title"] for e in existing], link_to=class_id)
+            if existing:
+                add("append", existing[0], 12, f"Add to your latest {class_title} lecture: “{existing[0]['title']}”", [])
+
+    # 2. Wherever this person's other lectures for the class already live.
+    groups: dict[str, list[dict]] = {}
+    for page in mine:
+        if page["type"] == "page" and page["parent"] and (_matches_class(page["title"], tokens)
+                                                            or LECTURE_WORDS.search(page["title"])):
+            groups.setdefault(notion.normalize_id(page["parent"]), []).append(page)
+    for parent_key, pages in groups.items():
+        parent = by_id.get(parent_key)
+        # Skip the class page itself and the classes table (its entries are classes, not lectures).
+        if not parent or notion.same_id(parent["id"], class_id) or notion.same_id(parent["id"], course_table):
+            continue
+        same_class = [p for p in pages if _matches_class(p["title"], tokens)]
+        score = 40 + 12 * len(same_class) + 2 * len(pages)
+        if parent["type"] == "database":
+            info = notion.table_info(parent["id"])
+            if not info:
+                continue
+            linked = bool(course_table and notion.link_column(info, course_table))
+            label = f"New entry in {parent['title']}, next to your other lectures" + \
+                    (f", linked to {class_title}" if linked else "")
+            add("entry", parent, score, label, [p["title"] for p in same_class or pages],
+                link_to=class_id if linked else None)
+        else:
+            add("page", parent, score, f"New page in {parent['title']}, next to your other lectures",
+                [p["title"] for p in same_class or pages])
+
+    # 3. Inside the class page itself.
+    if class_node and class_node["type"] == "page":
+        inside = [n["title"] for n in mine if notion.same_id(n.get("parent"), class_id)]
+        add("page", class_node, 30 + 3 * len(inside), f"New page inside {class_title}", inside)
+
+    # 4. Last resort: the person's own page (or the site's default page).
+    add("page", person, 1, f"New page in {person['title']}", [])
+    default = _node(by_id, notion.parent_page_id())
+    if default:
+        add("page", default, 0, f"New page in {default['title']}", [])
+
+    ranked = sorted(candidates.values(), key=lambda c: -c["score"])[:MAX_CANDIDATES]
+    best, title, reason = _choose(ranked, person["title"], class_title, note_title, summary)
+    for c in ranked:
+        c.pop("score")
+    return {"candidates": ranked, "best": best, "title": title, "reason": reason}
+
+
+def _choose(ranked: list[dict], person: str, class_title: str, note_title: str, summary: str):
+    """Ask the AI to pick the best place and a title in the person's naming style."""
+    listing = "\n".join(
+        f"{i}. {c['label']} — at: {c['where']}"
+        + (f" — existing titles there: {'; '.join(c['examples'])}" if c["examples"] else "")
+        for i, c in enumerate(ranked))
+    prompt = (
+        f"A lecture was recorded for {person}" + (f", class: {class_title}" if class_title else "") + ".\n"
+        f"Today is {date.today():%A, %B %d, %Y}.\nLecture title from the notes: {note_title}\n"
+        f"Summary: {summary[:800]}\n\nPlaces it could be saved (listed best-first by a heuristic):\n{listing}\n\n"
+        "Pick where it should go. Rules:\n"
+        "- It's a lecture recording, so it belongs with this person's other lectures for this class.\n"
+        "- A lectures/topics table linked to the class is usually best.\n"
+        "- Never pick a place that belongs to a different class.\n"
+        "- Only pick 'Add to your latest … lecture' if the notes are clearly a continuation of it.\n"
+        "Then write a page title that follows the naming style of the existing titles at that place "
+        "(e.g. if they're numbered 'csc lec 3', use the next number; keep their prefixes and casing). "
+        "If there are no existing titles, use a short descriptive title.\n"
+        'Reply as JSON: {"choice": <number>, "title": "<title>", "reason": "<one short sentence>"}'
+    )
+    try:
+        data = json.loads(groq.chat_json(
+            "You file lecture notes into the right place in a student's Notion. Reply with JSON only.",
+            prompt, lambda _: None))
+        choice = int(data.get("choice", 0))
+        title = str(data.get("title") or "").strip()[:150]
+        reason = str(data.get("reason") or "").strip()[:200]
+    except (AppError, ValueError, TypeError, json.JSONDecodeError):
+        choice, title, reason = 0, "", ""
+    if not 0 <= choice < len(ranked):
+        choice = 0
+    return choice, title or note_title or "Lecture notes", reason
+
+
+def send(place: dict, title: str, notes: dict, transcript: str, day: str | None) -> str:
+    kind, target = place.get("kind"), place.get("target_id") or ""
+    if kind == "entry":
+        return notion.create_entry(target, title, notes, transcript, day, link_to=place.get("link_to"))
+    if kind == "page":
+        return notion.create_page(title, notes, transcript, target)
+    if kind == "append":
+        return notion.append_to_page(target, title, notes, transcript)
+    raise AppError("Pick where to save the notes first.")

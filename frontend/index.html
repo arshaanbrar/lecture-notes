@@ -130,23 +130,33 @@
         <h2>Send to Notion</h2>
         <p id="notion-off" class="muted" hidden>Notion isn't connected yet. The site owner needs to add <code>NOTION_TOKEN</code> (see README).</p>
         <div id="notion-on">
-          <div class="segmented" role="radiogroup">
-            <label><input type="radio" name="notion-mode" value="new" checked> Create a new page</label>
-            <label><input type="radio" name="notion-mode" value="existing"> Add to an existing page</label>
-            <label id="lecture-option" hidden><input type="radio" name="notion-mode" value="lecture"> <span id="lecture-label">Add as a lecture</span></label>
+          <label class="label" for="who">Who is it for?</label>
+          <select id="who"></select>
+
+          <div id="class-step" hidden>
+            <label class="label" for="which-class">Which class?</label>
+            <select id="which-class"></select>
+            <input id="class-other" type="text" placeholder="Type the class, e.g. csc108 or Psychology" hidden>
+            <p id="class-hint" class="hint"></p>
           </div>
-          <div id="page-picker">
-            <input id="page-search" type="search" placeholder="Search all pages…">
-            <nav id="page-crumbs" class="crumbs" aria-label="Current location"></nav>
-            <ul id="page-list" class="page-list"></ul>
-            <p id="page-target" class="target"></p>
-            <p class="muted small">
-              Only pages shared with the integration show up here.
-              <button type="button" class="linkish" id="page-refresh">Refresh list</button>
-            </p>
+
+          <div id="plan-step" hidden>
+            <div class="plan">
+              <p class="plan-where">📍 <strong id="plan-where"></strong></p>
+              <p id="plan-path" class="muted small"></p>
+              <p id="plan-why" class="muted small"></p>
+            </div>
+            <label class="label" for="plan-title">Page title</label>
+            <input id="plan-title" type="text" maxlength="200">
+            <details class="plan-other">
+              <summary>Put it somewhere else</summary>
+              <select id="plan-alt" aria-label="Other places"></select>
+            </details>
+            <button id="notion-send" class="btn primary">Send to Notion</button>
           </div>
-          <button id="notion-send" class="btn primary">Send to Notion</button>
           <p id="notion-result"></p>
+          <p class="muted small">Names and classes come from the shared Notion.
+            <button type="button" class="linkish" id="notion-refresh">Refresh</button></p>
         </div>
       </section>
     </div>

@@ -409,7 +409,7 @@ function showResults(job) {
   $("#results").hidden = false;
   $("#notion-card").hidden = false;
   $("#notion-result").textContent = "";
-  if (state.config?.notion_configured && !tree.loaded) loadTree();
+  if (state.config?.notion_configured) startNotionFlow();
   $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -441,419 +441,196 @@ $("#start-over").addEventListener("click", () => {
 });
 
 // ---------- notion ----------
+// Who is it for → which class (the AI guesses from the lecture) → the AI suggests where it
+// goes in that person's Notion → Send.
 
-function notionMode() {
-  return $('input[name="notion-mode"]:checked').value;
+const WHO_KEY = "lecture-notes-who";
+const LAST_CLASS_KEY = "lecture-notes-last-class"; // { personId: classId }
+const OTHER = "__other";
+const sendState = { people: null, plan: null, planSeq: 0, classSeq: 0 };
+
+function recall(key) {
+  try { return localStorage.getItem(key) || ""; } catch { return ""; }
+}
+function remember(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* storage blocked */ }
+}
+function lastClasses() {
+  try { return JSON.parse(recall(LAST_CLASS_KEY) || "{}"); } catch { return {}; }
 }
 
-// Folder-style page browser: `path` is the list of page IDs from the top level down to
-// the page that's open. The open page is where notes get added.
-// `ordered` holds each opened page's sub-pages in the order they appear in Notion.
-const tree = { loaded: false, nodes: new Map(), children: new Map(), ordered: new Map(), errors: new Map(), loading: new Set(), path: [] };
-
-// Linked views (e.g. a "Courses" gallery that shows the "Domains" table) can't be opened through
-// Notion's API. The user picks which table a view shows once; that's remembered on this device.
-const VIEW_SOURCES_KEY = "lecture-notes-view-sources";
-
-function viewSources() {
-  try { return JSON.parse(localStorage.getItem(VIEW_SOURCES_KEY) || "{}"); } catch { return {}; }
+function noteContext() {
+  return { note_title: $("#note-title").value.trim(), summary: state.result?.notes?.summary || "" };
 }
 
-function setViewSource(viewId, sourceId) {
-  const map = viewSources();
-  if (sourceId) map[viewId] = sourceId;
-  else delete map[viewId];
-  try { localStorage.setItem(VIEW_SOURCES_KEY, JSON.stringify(map)); } catch { /* storage blocked */ }
+function postJson(path, body) {
+  return api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
-function sourceFor(viewId) {
-  const id = viewSources()[viewId];
-  return id && tree.nodes.has(id) ? id : null;
+async function startNotionFlow() {
+  $("#notion-result").textContent = "";
+  if (!sendState.people) await loadPeople();
+  else if ($("#who").value) await loadClasses(); // new notes: guess the class again
 }
 
-function sourceCandidates(viewId) {
-  const tables = [...tree.nodes.values()].filter((n) => n.type === "database" && n.id !== viewId && !tree.errors.has(n.id));
-  // Tables directly on the nearest page above the view that has any (incl. ones tucked in a
-  // template's "do not delete" toggle). Never tables from other people's areas.
-  for (const ancestor of pathTo(tree.nodes.get(viewId)?.parent).reverse()) {
-    const direct = tables.filter((n) => n.parent === ancestor);
-    if (direct.length) return direct.slice(0, 30);
-  }
-  return [];
-}
-
-const COURSE_WORDS = /course|class|subject|module|domain/i;
-
-// "Courses" / "Classes" views almost always show the template's courses table (e.g. "Domains").
-function guessSource(viewId) {
-  if (!COURSE_WORDS.test(tree.nodes.get(viewId)?.title || "")) return null;
-  const matches = sourceCandidates(viewId).filter((t) => COURSE_WORDS.test(t.title));
-  return matches.length === 1 ? matches[0].id : null;
-}
-
-function kidsOf(id) {
-  const known = tree.children.get(id) || [];
-  const ordered = id === null ? null : tree.ordered.get(id);
-  // Once a page's real contents are loaded, show exactly those (in Notion's order).
-  return (ordered || known).filter((k) => tree.nodes.has(k));
-}
-
-async function loadChildren(id, refresh = false) {
-  if (tree.loading.has(id)) return;
-  tree.loading.add(id);
+async function loadPeople(refresh = false) {
+  const who = $("#who");
+  who.replaceChildren(new Option("Loading names…", ""));
   try {
-    const kind = tree.nodes.get(id)?.type || "page";
-    const { children } = await api(`/api/notion/children/${id}?kind=${kind}${refresh ? "&refresh=true" : ""}`);
-    for (const child of children) {
-      const existing = tree.nodes.get(child.id);
-      tree.nodes.set(child.id, { ...child, icon: child.icon || existing?.icon || "", parent: id });
-      if (existing && existing.parent !== id) {
-        const old = tree.children.get(existing.parent);
-        if (old) tree.children.set(existing.parent, old.filter((k) => k !== child.id));
-      }
-    }
-    // Things inside collapsed toggles (template internals) stay searchable but aren't listed.
-    const visible = children.filter((c) => !c.hidden).map((c) => c.id);
-    if (kind === "database") {
-      visible.sort((a, b) => tree.nodes.get(a).title.localeCompare(tree.nodes.get(b).title, undefined, { numeric: true }));
-    }
-    tree.ordered.set(id, visible);
-    tree.errors.delete(id);
+    const { people } = await api(`/api/notion/people${refresh ? "?refresh=true" : ""}`);
+    sendState.people = people;
+    who.replaceChildren(new Option("Choose a name…", ""),
+      ...people.map((p) => new Option(`${p.icon ? p.icon + " " : ""}${p.title}`, p.id)));
+    const saved = recall(WHO_KEY);
+    if (people.some((p) => p.id === saved)) who.value = saved;
   } catch (err) {
-    tree.ordered.set(id, null); // fall back to what search found (A–Z)
-    tree.errors.set(id, err.message);
-  } finally {
-    tree.loading.delete(id);
+    who.replaceChildren(new Option("Couldn't load names", ""));
+    showError(err.message);
   }
-  renderTree();
+  await loadClasses();
 }
 
-function nodeLabel(node) {
-  return `${node.icon || (node.type === "database" ? "🗂️" : "📄")} ${node.title}`;
-}
+async function loadClasses() {
+  const personId = $("#who").value;
+  const seq = ++sendState.classSeq;
+  $("#class-step").hidden = !personId;
+  $("#plan-step").hidden = true;
+  if (!personId) return;
 
-function pathTo(id) {
-  const path = [];
-  for (let cur = id; cur && tree.nodes.has(cur) && path.length < 50; cur = tree.nodes.get(cur).parent) path.unshift(cur);
-  return path;
-}
-
-function openNode(id) {
-  tree.path = id ? pathTo(id) : [];
-  $("#page-search").value = "";
-  renderTree();
-}
-
-// Courses in course/lecture templates can take notes as a new linked lecture entry.
-const lectureTargets = new Map(); // page id -> {available, database_title, course_title} | "loading"
-let lectureAutoPickedFor = null;
-
-function lectureInfo(id) {
-  const info = id && lectureTargets.get(id);
-  return info && info !== "loading" && info.available ? info : null;
-}
-
-function ensureLectureTarget(id) {
-  const node = id && tree.nodes.get(id);
-  const inTable = node && node.type === "page" && tree.nodes.get(node.parent)?.type === "database";
-  if (inTable && !lectureTargets.has(id)) {
-    lectureTargets.set(id, "loading");
-    api(`/api/notion/lecture-target/${id}`)
-      .then((info) => lectureTargets.set(id, info))
-      .catch(() => lectureTargets.set(id, { available: false }))
-      .finally(() => renderTree());
-  }
-  return lectureInfo(id);
-}
-
-// Lectures of a course, shown under a view inside the course page (e.g. its "Topics" list).
-const courseLectures = new Map(); // course id -> [ids] | "loading" | null
-
-function loadCourseLectures(courseId, viewId) {
-  if (courseLectures.has(courseId)) return;
-  courseLectures.set(courseId, "loading");
-  api(`/api/notion/lectures/${courseId}`)
-    .then(({ lectures }) => {
-      lectures.forEach((l) => tree.nodes.set(l.id, { ...l, parent: viewId, lecture: true }));
-      courseLectures.set(courseId, lectures.map((l) => l.id));
-    })
-    .catch(() => courseLectures.set(courseId, null))
-    .finally(() => renderTree());
-}
-
-function updateLectureOption() {
-  const id = selectedPageId();
-  // Opening an existing lecture: adding the notes to it is the likely intent.
-  if (id && tree.nodes.get(id).lecture && lectureAutoPickedFor !== id) {
-    lectureAutoPickedFor = id;
-    $('input[name="notion-mode"][value="existing"]').checked = true;
-  }
-  ensureLectureTarget(id);
-  const info = lectureInfo(id);
-  const option = $("#lecture-option");
-  option.hidden = !info;
-  if (info) {
-    $("#lecture-label").textContent = `Add as a lecture in ${info.database_title}`;
-    if (lectureAutoPickedFor !== id) {
-      lectureAutoPickedFor = id; // pick it once per course; the user can switch back
-      $('input[name="notion-mode"][value="lecture"]').checked = true;
-    }
-  } else if (notionMode() === "lecture") {
-    $('input[name="notion-mode"][value="new"]').checked = true;
-  }
-}
-
-function canSend() {
-  if (notionMode() === "lecture") return !!lectureInfo(selectedPageId());
-  if (selectedPageId()) return true;
-  return notionMode() === "new" && !tree.path.length && !!state.config?.notion_default_parent;
-}
-
-function selectedPageId() {
-  const id = tree.path[tree.path.length - 1];
-  return id && tree.nodes.get(id).type === "page" ? id : "";
-}
-
-function pageRow(node, subtitle) {
-  const li = document.createElement("li");
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "page-row";
-  const name = document.createElement("span");
-  name.className = "page-name";
-  name.textContent = nodeLabel(node);
-  btn.append(name);
-  if (subtitle) {
-    const sub = document.createElement("span");
-    sub.className = "page-path";
-    sub.textContent = subtitle;
-    btn.append(sub);
-  }
-  if (node.type === "database" || kidsOf(node.id).length) {
-    const arrow = document.createElement("span");
-    arrow.className = "page-arrow";
-    arrow.textContent = "›";
-    btn.append(arrow);
-  }
-  btn.addEventListener("click", () => openNode(node.id));
-  li.append(btn);
-  return li;
-}
-
-function renderTree() {
-  const list = $("#page-list");
-  const crumbs = $("#page-crumbs");
-  const query = $("#page-search").value.trim().toLowerCase();
-  list.replaceChildren();
-  crumbs.replaceChildren();
-
-  if (!tree.loaded) {
-    list.innerHTML = '<li class="muted page-empty">Loading pages…</li>';
-    return;
-  }
-
-  if (query) {
-    // Search: flat list of matches anywhere, with their location shown underneath.
-    const matches = [...tree.nodes.values()].filter((n) => n.title.toLowerCase().includes(query)).slice(0, 60);
-    matches.forEach((n) => {
-      const where = pathTo(n.parent).map((id) => tree.nodes.get(id).title).join(" › ") || "Top level";
-      list.append(pageRow(n, where));
-    });
-    if (!matches.length) list.innerHTML = '<li class="muted page-empty">No pages match.</li>';
-  } else {
-    // Breadcrumbs: All pages › University › Math
-    const crumb = (label, id) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "crumb";
-      b.textContent = label;
-      b.addEventListener("click", () => openNode(id));
-      return b;
-    };
-    crumbs.append(crumb("All pages", null));
-    tree.path.forEach((id) => crumbs.append(" › ", crumb(tree.nodes.get(id).title, id)));
-
-    const current = tree.path[tree.path.length - 1] ?? null;
-    if (current !== null && !tree.ordered.has(current)) {
-      loadChildren(current);
-      list.innerHTML = '<li class="muted page-empty">Loading…</li>';
-    }
-    // A view we can't open, but the user told us which table it shows: list that table instead.
-    const blockedView = current !== null && tree.errors.has(current);
-    const course = blockedView ? tree.nodes.get(current).parent : null;
-    const courseInfo = course ? ensureLectureTarget(course) : null;
-    if (blockedView && courseInfo && !sourceFor(current)) {
-      renderCourseLectures(list, current, course, courseInfo);
-      return finishRender();
-    }
-    if (blockedView && !sourceFor(current) && guessSource(current)) setViewSource(current, guessSource(current));
-    const showing = blockedView && sourceFor(current) ? sourceFor(current) : current;
-    if (showing !== current && !tree.ordered.has(showing)) loadChildren(showing);
-
-    if (blockedView && showing === current) {
-      renderViewSourcePicker(list, current);
-      return finishRender();
-    }
-    const kids = kidsOf(showing);
-    // On a course page, name its unnamed lecture list (e.g. "Topics for this course").
-    const here = current && lectureInfo(current);
-    if (here) {
-      kids.map((k) => tree.nodes.get(k))
-        .filter((n) => n.type === "database" && /^untitled/i.test(n.title))
-        .forEach((n) => { n.title = `${here.database_title} for this course`; });
-    }
-    if (kids.length || showing !== current) list.replaceChildren();
-    if (showing !== current) {
-      const note = document.createElement("li");
-      note.className = "muted page-empty";
-      const change = document.createElement("button");
-      change.type = "button";
-      change.className = "linkish";
-      change.textContent = "change";
-      change.addEventListener("click", () => { setViewSource(current, null); renderTree(); });
-      note.append(`Showing entries from ${tree.nodes.get(showing).title} (`, change, ")");
-      list.append(note);
-    }
-    kids.forEach((id) => list.append(pageRow(tree.nodes.get(id))));
-    if (!kids.length && showing === current && (current === null || tree.ordered.has(current))) {
-      list.innerHTML = current
-        ? '<li class="muted page-empty">No pages inside this one.</li>'
-        : '<li class="muted page-empty">No pages found. Share pages with your integration in Notion.</li>';
-      if (current && tree.errors.has(current)) list.firstChild.textContent = tree.errors.get(current);
-    }
-  }
-
-  finishRender();
-}
-
-function renderCourseLectures(list, viewId, courseId, info) {
-  const view = tree.nodes.get(viewId);
-  if (/^untitled/i.test(view.title)) view.title = `${info.database_title} for this course`;
-  loadCourseLectures(courseId, viewId);
-  const ids = courseLectures.get(courseId);
-  list.replaceChildren();
-  const note = document.createElement("li");
-  note.className = "muted page-empty";
-  note.textContent = ids === "loading" ? "Loading…"
-    : ids === null ? `Couldn't load the lectures for ${info.course_title}.`
-    : `${info.database_title} for ${info.course_title}`;
-  list.append(note);
-  if (Array.isArray(ids)) {
-    ids.forEach((id) => list.append(pageRow(tree.nodes.get(id))));
-    if (!ids.length) note.textContent = `No ${info.database_title} entries for ${info.course_title} yet.`;
-  }
-  // Re-draw the breadcrumb with the friendlier view name.
-  const last = $("#page-crumbs").lastElementChild;
-  if (last) last.textContent = view.title;
-}
-
-function renderViewSourcePicker(list, viewId) {
-  list.replaceChildren();
-  const intro = document.createElement("li");
-  intro.className = "muted page-empty";
-  intro.textContent = "Notion doesn't let apps open this view directly. Which table does it show? (remembered on this device)";
-  list.append(intro);
-  const candidates = sourceCandidates(viewId);
-  for (const table of candidates) {
-    const li = document.createElement("li");
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "page-row";
-    const name = document.createElement("span");
-    name.className = "page-name";
-    name.textContent = nodeLabel(table);
-    const where = document.createElement("span");
-    where.className = "page-path";
-    where.textContent = pathTo(table.parent).map((id) => tree.nodes.get(id).title).join(" › ") || "Top level";
-    btn.append(name, where);
-    btn.addEventListener("click", () => { setViewSource(viewId, table.id); renderTree(); });
-    li.append(btn);
-    list.append(li);
-  }
-  if (!candidates.length) intro.textContent = tree.errors.get(viewId);
-}
-
-function finishRender() {
-  updateLectureOption();
-  const target = $("#page-target");
-  const creating = notionMode() === "new";
-  const id = tree.path[tree.path.length - 1];
-  const lecture = notionMode() === "lecture" && lectureInfo(id);
-  if (lecture) {
-    const course = document.createElement("strong");
-    course.textContent = lecture.course_title;
-    target.replaceChildren(`New lecture will be added to ${lecture.database_title}, linked to `, course, ".");
-  } else if (!id) {
-    target.textContent = creating
-      ? (state.config?.notion_default_parent
-        ? "The new page will go in your default notes page, or open a page to create it there."
-        : "Open the page you want the new page created inside.")
-      : "Open the page you want to add notes to.";
-  } else if (tree.nodes.get(id).type === "database") {
-    target.textContent = "This is a database. Open a page inside it.";
-  } else {
-    const where = document.createElement("strong");
-    where.textContent = tree.path.map((p) => tree.nodes.get(p).title).join(" › ");
-    target.replaceChildren(creating ? "New page will be created inside: " : "Notes will be added to: ", where);
-  }
-  $("#notion-send").disabled = !canSend();
-}
-
-async function loadTree(refresh = false) {
-  tree.loaded = false;
-  renderTree();
+  const select = $("#which-class");
+  const hint = $("#class-hint");
+  select.disabled = true;
+  select.replaceChildren(new Option("Looking through their Notion…", ""));
+  hint.textContent = "";
+  let classes = [], guess = null;
   try {
-    const { nodes } = await api(`/api/notion/tree${refresh ? "?refresh=true" : ""}`);
-    const byTitle = (a, b) => tree.nodes.get(a).title.localeCompare(tree.nodes.get(b).title, undefined, { numeric: true });
-    tree.nodes = new Map(nodes.map((n) => [n.id, n]));
-    tree.children = new Map();
-    nodes.forEach((n) => {
-      if (!tree.children.has(n.parent)) tree.children.set(n.parent, []);
-      tree.children.get(n.parent).push(n.id);
-    });
-    tree.children.forEach((ids) => ids.sort(byTitle));
-    tree.ordered = new Map(); // page orders are re-fetched as pages are opened
-    tree.errors = new Map();
-    tree.path = tree.path.filter((id) => tree.nodes.has(id));
-    tree.loaded = true;
+    ({ classes, guess } = await postJson("/api/notion/classes", { person_id: personId, ...noteContext() }));
   } catch (err) {
     showError(err.message);
   }
-  renderTree();
+  if (seq !== sendState.classSeq) return; // the person changed while we were looking
+
+  select.replaceChildren(new Option("Choose a class…", ""));
+  const groups = new Map();
+  for (const c of classes) {
+    if (!groups.has(c.group)) groups.set(c.group, []);
+    groups.get(c.group).push(c);
+  }
+  for (const [name, items] of groups) {
+    const group = document.createElement("optgroup");
+    group.label = name;
+    items.forEach((c) => group.append(new Option(`${c.icon ? c.icon + " " : ""}${c.title}`, c.id)));
+    select.append(group);
+  }
+  select.append(new Option("Something else (type it)…", OTHER));
+  select.disabled = false;
+
+  const last = lastClasses()[personId];
+  if (guess) {
+    select.value = guess;
+    hint.textContent = "🤖 Guessed from the lecture. Change it if that's wrong.";
+  } else if (classes.some((c) => c.id === last)) {
+    select.value = last;
+    hint.textContent = "Same class as last time.";
+  } else if (!classes.length) {
+    select.value = OTHER;
+    hint.textContent = "No class list found in their Notion. Type the class name and press Enter.";
+  }
+  onClassChange();
 }
 
-$$('input[name="notion-mode"]').forEach((r) => r.addEventListener("change", () => {
-  if (tree.loaded) renderTree();
-  else loadTree();
-}));
+function onClassChange() {
+  const value = $("#which-class").value;
+  const other = value === OTHER;
+  $("#class-other").hidden = !other;
+  if (other) {
+    if ($("#class-other").value.trim()) makePlan();
+    else {
+      $("#plan-step").hidden = true;
+      $("#class-other").focus();
+    }
+    return;
+  }
+  if (!value) {
+    $("#plan-step").hidden = true;
+    return;
+  }
+  remember(LAST_CLASS_KEY, JSON.stringify({ ...lastClasses(), [$("#who").value]: value }));
+  makePlan();
+}
 
-$("#page-search").addEventListener("input", renderTree);
-$("#page-refresh").addEventListener("click", () => loadTree(true));
+async function makePlan() {
+  const value = $("#which-class").value;
+  const body = {
+    person_id: $("#who").value,
+    class_id: value && value !== OTHER ? value : null,
+    class_text: value === OTHER ? $("#class-other").value.trim() : "",
+    ...noteContext(),
+  };
+  if (!body.person_id || (!body.class_id && !body.class_text)) return;
+
+  const seq = ++sendState.planSeq;
+  $("#notion-result").textContent = "";
+  $("#plan-step").hidden = false;
+  $("#plan-where").textContent = "Finding the best spot…";
+  $("#plan-path").textContent = "";
+  $("#plan-why").textContent = "";
+  $("#plan-alt").replaceChildren();
+  $("#notion-send").disabled = true;
+  try {
+    const plan = await postJson("/api/notion/plan", body);
+    if (seq !== sendState.planSeq) return; // a newer choice replaced this one
+    sendState.plan = plan;
+    $("#plan-title").value = plan.title;
+    $("#plan-alt").replaceChildren(...plan.candidates.map((c, i) => new Option(c.label, String(i))));
+    $("#plan-alt").value = String(plan.best);
+    showPlace(plan.best, plan.reason);
+    $("#notion-send").disabled = false;
+  } catch (err) {
+    if (seq !== sendState.planSeq) return;
+    $("#plan-where").textContent = "Couldn't work out where it goes.";
+    showError(err.message);
+  }
+}
+
+function showPlace(index, reason) {
+  const place = sendState.plan.candidates[index];
+  $("#plan-where").textContent = place.label;
+  $("#plan-path").textContent = place.where;
+  $("#plan-why").textContent = reason ? `🤖 ${reason}` : "";
+}
+
+$("#who").addEventListener("change", () => {
+  remember(WHO_KEY, $("#who").value);
+  loadClasses();
+});
+$("#which-class").addEventListener("change", onClassChange);
+$("#class-other").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    makePlan();
+  }
+});
+$("#class-other").addEventListener("change", makePlan);
+$("#plan-alt").addEventListener("change", () => showPlace(Number($("#plan-alt").value), ""));
+$("#notion-refresh").addEventListener("click", () => loadPeople(true));
 
 $("#notion-send").addEventListener("click", async () => {
-  if (!state.result) return;
+  if (!state.result || !sendState.plan) return;
   clearError();
-  const mode = notionMode();
-  const pageId = selectedPageId();
-  if (!canSend()) { showError("Open a Notion page in the list first."); return; }
-
+  const place = sendState.plan.candidates[Number($("#plan-alt").value)];
   const btn = $("#notion-send");
   btn.disabled = true;
   btn.textContent = "Sending…";
   $("#notion-result").textContent = "";
   try {
     const { notes, transcript } = state.result;
-    const { url } = await api("/api/notion/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        mode,
-        page_id: pageId || null,
-        title: $("#note-title").value.trim() || "Untitled notes",
-        notes: { summary: notes.summary, key_points: notes.key_points, action_items: notes.action_items },
-        transcript,
-        local_date: new Date().toLocaleDateString("en-CA"), // YYYY-MM-DD in the user's timezone
-      }),
+    const { url } = await postJson("/api/notion/export", {
+      place: { kind: place.kind, target_id: place.target_id, link_to: place.link_to },
+      title: $("#plan-title").value.trim() || $("#note-title").value.trim() || "Lecture notes",
+      notes: { summary: notes.summary, key_points: notes.key_points, action_items: notes.action_items },
+      transcript,
+      local_date: new Date().toLocaleDateString("en-CA"), // YYYY-MM-DD in the user's timezone
     });
     const a = document.createElement("a");
     a.href = url;
@@ -861,11 +638,10 @@ $("#notion-send").addEventListener("click", async () => {
     a.rel = "noopener";
     a.textContent = "Open in Notion ↗";
     $("#notion-result").replaceChildren("✅ Saved to Notion. ", a);
-    if (mode !== "existing") loadTree(true); // show the page we just created
   } catch (err) {
     showError(err.message);
   } finally {
-    btn.disabled = !canSend();
+    btn.disabled = false;
     btn.textContent = "Send to Notion";
   }
 });

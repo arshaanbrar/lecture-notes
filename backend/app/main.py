@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, jobs, notion
+from . import config, jobs, notion, placement
 from .utils import AppError
 
 logging.basicConfig(level=logging.INFO)
@@ -55,7 +55,6 @@ def get_config():
     return {
         "password_required": bool(config.APP_PASSWORD),
         "notion_configured": notion.is_configured(),
-        "notion_default_parent": bool(notion.parent_page_id()),
         "transcribe_backend": config.TRANSCRIBE_BACKEND,
         "max_upload_mb": config.MAX_UPLOAD_MB,
     }
@@ -106,18 +105,44 @@ def job_status(job_id: str):
 
 
 # ---------- notion ----------
+#
+# Sending notes is: who is it for → which class → the AI picks the best spot → confirm.
 
-@api.get("/notion/tree")
-def notion_tree(refresh: bool = False):
-    return {"nodes": notion.page_tree(refresh)}
+@api.get("/notion/people")
+def notion_people(refresh: bool = False):
+    if refresh:
+        notion.forget_cached()
+    return {"people": placement.people()}
 
 
-@api.get("/notion/children/{parent_id}")
-def notion_children(parent_id: str, kind: Literal["page", "database"] = "page", refresh: bool = False):
-    clean_id = notion.normalize_id(parent_id)
-    if not clean_id:
-        raise HTTPException(status_code=400, detail="Invalid Notion page ID.")
-    return {"children": notion.children(clean_id, kind, refresh)}
+class NoteContext(BaseModel):
+    note_title: str = Field(default="", max_length=300)
+    summary: str = Field(default="", max_length=5000)
+
+
+class ClassesBody(NoteContext):
+    person_id: str
+
+
+@api.post("/notion/classes")
+def notion_classes(body: ClassesBody):
+    if not notion.normalize_id(body.person_id):
+        raise HTTPException(status_code=400, detail="Pick a person first.")
+    return placement.classes(body.person_id, body.note_title, body.summary)
+
+
+class PlanBody(NoteContext):
+    person_id: str
+    class_id: str | None = None
+    class_text: str = Field(default="", max_length=200)
+
+
+@api.post("/notion/plan")
+def notion_plan(body: PlanBody):
+    if not notion.normalize_id(body.person_id):
+        raise HTTPException(status_code=400, detail="Pick a person first.")
+    class_id = body.class_id if body.class_id and notion.normalize_id(body.class_id) else None
+    return placement.plan(body.person_id, class_id, body.class_text, body.note_title, body.summary)
 
 
 class Notes(BaseModel):
@@ -126,25 +151,14 @@ class Notes(BaseModel):
     action_items: list[str] = []
 
 
-@api.get("/notion/lecture-target/{page_id}")
-def notion_lecture_target(page_id: str):
-    target = notion.lecture_target(page_id) if notion.normalize_id(page_id) else None
-    if not target:
-        return {"available": False}
-    return {"available": True, "database_id": target["database_id"],
-            "database_title": target["database_title"], "course_title": target["course_title"]}
-
-
-@api.get("/notion/lectures/{course_id}")
-def notion_course_lectures(course_id: str):
-    if not notion.normalize_id(course_id):
-        raise HTTPException(status_code=400, detail="Invalid Notion page ID.")
-    return {"lectures": notion.course_lectures(course_id)}
+class Place(BaseModel):
+    kind: Literal["entry", "page", "append"]
+    target_id: str = Field(pattern=r"[0-9a-fA-F-]{32,36}")
+    link_to: str | None = Field(default=None, pattern=r"[0-9a-fA-F-]{32,36}")
 
 
 class ExportBody(BaseModel):
-    mode: Literal["new", "existing", "lecture"]
-    page_id: str | None = None
+    place: Place
     title: str = Field(min_length=1, max_length=200)
     notes: Notes
     transcript: str = ""
@@ -153,13 +167,8 @@ class ExportBody(BaseModel):
 
 @api.post("/notion/export")
 def notion_export(body: ExportBody):
-    notes = body.notes.model_dump()
-    if body.mode == "lecture":
-        url = notion.create_lecture(body.page_id or "", body.title, notes, body.transcript, body.local_date)
-    elif body.mode == "new":
-        url = notion.create_page(body.title, notes, body.transcript, body.page_id)
-    else:
-        url = notion.append_to_page(body.page_id or "", body.title, notes, body.transcript)
+    url = placement.send(body.place.model_dump(), body.title, body.notes.model_dump(),
+                         body.transcript, body.local_date)
     return {"url": url}
 
 

@@ -18,7 +18,7 @@ You never edit code to add keys. All keys are environment variables:
 |---|---|---|---|
 | `GROQ_API_KEY` | Groq API key (`gsk_…`) | [Step 1](#step-1--get-a-free-groq-api-key) | **Yes** |
 | `NOTION_TOKEN` | Notion integration secret (`ntn_…`) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | For Notion export |
-| `NOTION_PARENT_PAGE_ID` | Default page for "Create a new page" when nobody picks one (paste its URL) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | Optional |
+| `NOTION_PARENT_PAGE_ID` | A fallback page offered as a last-resort place for notes (paste its URL) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | Optional |
 | `APP_PASSWORD` | Optional password that every visitor must enter | You make it up | Recommended |
 
 - **Locally:** copy `.env.example` to `.env` and fill it in. `.env` is git-ignored.
@@ -160,6 +160,21 @@ To change a key later, go to your service → **Environment** → edit the value
 | **Both** | Mic and system audio mixed together | Chrome / Edge / Opera on a computer |
 
 For system audio, the browser shows a share dialog. **Pick a tab, window or screen and turn on "Share audio".** Sharing a **browser tab** (e.g. Zoom/Meet/Teams on the web, or a YouTube lecture) is the most reliable option. On macOS, sharing a whole window or screen may not include audio in every version, so a tab is the safest choice. Firefox and Safari can't capture system audio, so the app disables those buttons there.
+
+### Sending to Notion
+
+After the notes are written, the **Send to Notion** box asks two things:
+
+1. **Who is it for?** A name from the top level of the shared Notion (one page per person). Each device remembers the last choice.
+2. **Which class?** The site lists the classes it finds in that person's Notion, e.g. the entries of their *Courses*, *Classes* or *Domains* table. The AI pre-selects the class that matches the lecture. If no class list is found, pick **Something else** and type the class name (e.g. `csc108`).
+
+The AI then suggests where the notes should go, preferring where that person's lectures for the class already live:
+
+- a **lectures/topics table linked to the class**: a new entry, with the class link, a `lecture` type and today's date filled in when the table has those columns;
+- the page where their **other lecture pages** for the class are, titled in the same style (e.g. `csc lec 3` → `csc lec 4`);
+- **inside the class page**, or adding to their **latest lecture**.
+
+Check the suggestion and the page title, then click **Send to Notion**, or open **Put it somewhere else** to choose another of the suggested places. Nothing is written until you click Send.
 
 ### Upload / link
 
