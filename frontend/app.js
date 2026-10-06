@@ -474,8 +474,19 @@ function sourceFor(viewId) {
 function sourceCandidates(viewId) {
   const page = tree.nodes.get(viewId)?.parent;
   const tables = [...tree.nodes.values()].filter((n) => n.type === "database" && n.id !== viewId && !tree.errors.has(n.id));
-  const samePage = tables.filter((n) => pathTo(n.id).slice(0, -1).includes(page));
-  return (samePage.length ? samePage : tables).slice(0, 30);
+  // Tables directly on the same page first (incl. ones tucked in a template's "do not delete"
+  // toggle); tables nested inside other pages are rarely what a view shows.
+  const direct = tables.filter((n) => n.parent === page);
+  return (direct.length ? direct : tables).slice(0, 30);
+}
+
+const COURSE_WORDS = /course|class|subject|module|domain/i;
+
+// "Courses" / "Classes" views almost always show the template's courses table (e.g. "Domains").
+function guessSource(viewId) {
+  if (!COURSE_WORDS.test(tree.nodes.get(viewId)?.title || "")) return null;
+  const matches = sourceCandidates(viewId).filter((t) => COURSE_WORDS.test(t.title));
+  return matches.length === 1 ? matches[0].id : null;
 }
 
 function kidsOf(id) {
@@ -642,6 +653,7 @@ function renderTree() {
     }
     // A view we can't open, but the user told us which table it shows: list that table instead.
     const blockedView = current !== null && tree.errors.has(current);
+    if (blockedView && !sourceFor(current) && guessSource(current)) setViewSource(current, guessSource(current));
     const showing = blockedView && sourceFor(current) ? sourceFor(current) : current;
     if (showing !== current && !tree.ordered.has(showing)) loadChildren(showing);
 
