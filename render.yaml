@@ -1,0 +1,21 @@
+# Render Blueprint — Render reads this when you choose "New → Blueprint".
+services:
+  - type: web
+    name: lecture-notes
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # ⚠️ Render will ask you to paste these during setup (sync: false = secret, not stored in git)
+      - key: GROQ_API_KEY
+        sync: false
+      - key: NOTION_TOKEN
+        sync: false
+      - key: NOTION_PARENT_PAGE_ID
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: TRANSCRIBE_BACKEND
+        value: groq

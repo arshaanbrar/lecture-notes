@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lecture Notes</title>
+  <meta name="description" content="Record or upload a lecture or meeting and get a transcript, AI summary notes, and a Notion page.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📝</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <h1>📝 Lecture Notes</h1>
+    <p>Record or upload a lecture or meeting. Get a transcript, summary notes, and a Notion page.</p>
+  </header>
+
+  <main>
+    <div id="error" class="alert" role="alert" hidden>
+      <span id="error-text"></span>
+      <button class="icon-btn" id="error-close" aria-label="Dismiss">×</button>
+    </div>
+
+    <!-- Shown only when the site owner set APP_PASSWORD -->
+    <section id="unlock" class="card" hidden>
+      <h2>Enter password</h2>
+      <p class="muted">This site is password-protected.</p>
+      <form id="unlock-form" class="row">
+        <input id="unlock-input" type="password" placeholder="Password" autocomplete="current-password" required>
+        <button class="btn primary" type="submit">Unlock</button>
+      </form>
+      <p id="unlock-msg" class="muted"></p>
+    </section>
+
+    <div id="app">
+      <section class="card" id="input-card">
+        <div class="tabs" role="tablist">
+          <button class="tab" role="tab" data-tab="record" aria-selected="true">🎙️ Record</button>
+          <button class="tab" role="tab" data-tab="upload" aria-selected="false">📁 Upload file or link</button>
+        </div>
+
+        <div class="tab-panel" id="tab-record">
+          <p class="label">1. Choose what to record</p>
+          <div class="sources">
+            <button class="source" data-source="mic" aria-pressed="true">
+              <strong>🎙️ Mic only</strong>
+              <span>Your microphone. Best for in-person lectures.</span>
+            </button>
+            <button class="source" data-source="system" aria-pressed="false">
+              <strong>🔊 System audio only</strong>
+              <span>Sound from a tab or your computer, e.g. a Zoom call or video.</span>
+            </button>
+            <button class="source" data-source="both" aria-pressed="false">
+              <strong>🎧 Both</strong>
+              <span>Mic plus computer audio. Best for calls where you talk too.</span>
+            </button>
+          </div>
+          <p id="source-hint" class="hint"></p>
+
+          <p class="label">2. Record</p>
+          <div class="recorder">
+            <button id="rec-btn" class="btn primary rec">● Start recording</button>
+            <span id="rec-timer" class="timer">00:00</span>
+            <div class="meter" aria-hidden="true"><div id="meter-fill"></div></div>
+          </div>
+
+          <div id="recording-ready" class="ready" hidden>
+            <audio id="rec-preview" controls></audio>
+            <div class="row">
+              <button id="rec-process" class="btn primary">Transcribe &amp; write notes</button>
+              <a id="rec-download" class="btn" download>⬇ Save recording</a>
+              <button id="rec-discard" class="btn ghost">Discard</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="tab-upload" hidden>
+          <p class="label">Upload an audio or video file</p>
+          <label class="dropzone" id="dropzone">
+            <input type="file" id="file-input" accept="audio/*,video/*,.m4a,.mp3,.mp4,.wav,.webm,.mov,.mkv,.ogg">
+            <span id="file-name">Drop a file here or <u>browse</u></span>
+            <small class="muted" id="file-limit"></small>
+          </label>
+          <button id="file-process" class="btn primary" disabled>Transcribe &amp; write notes</button>
+
+          <div class="or"><span>or paste a link</span></div>
+
+          <form id="url-form" class="row">
+            <input id="url-input" type="url" placeholder="https://… (YouTube, Vimeo, Loom, direct .mp3/.mp4 link)" required>
+            <button class="btn primary" type="submit">Transcribe link</button>
+          </form>
+        </div>
+      </section>
+
+      <section class="card" id="status-card" hidden>
+        <div class="status">
+          <div class="spinner" aria-hidden="true"></div>
+          <div>
+            <strong id="status-text">Working…</strong>
+            <p class="muted" id="status-sub">Long recordings can take a few minutes. Keep this tab open.</p>
+          </div>
+        </div>
+        <div class="progress" id="upload-progress" hidden><div id="upload-fill"></div></div>
+      </section>
+
+      <section class="card" id="results" hidden>
+        <label class="label" for="note-title">Title</label>
+        <input id="note-title" class="title-input" maxlength="200">
+
+        <div id="notes-body">
+          <h3>Summary</h3>
+          <p id="note-summary"></p>
+          <h3>Key points</h3>
+          <ul id="note-points"></ul>
+          <h3>Action items</h3>
+          <ul id="note-actions" class="checklist"></ul>
+        </div>
+
+        <details class="transcript">
+          <summary>Full transcript <span id="word-count" class="muted"></span></summary>
+          <div id="note-transcript"></div>
+        </details>
+
+        <div class="row">
+          <button id="copy-md" class="btn">Copy as Markdown</button>
+          <button id="start-over" class="btn ghost">Start over</button>
+        </div>
+      </section>
+
+      <section class="card" id="notion-card" hidden>
+        <h2>Send to Notion</h2>
+        <p id="notion-off" class="muted" hidden>Notion isn't connected yet. The site owner needs to add <code>NOTION_TOKEN</code> (see README).</p>
+        <div id="notion-on">
+          <div class="segmented" role="radiogroup">
+            <label><input type="radio" name="notion-mode" value="new" checked> Create a new page</label>
+            <label><input type="radio" name="notion-mode" value="existing"> Add to an existing page</label>
+          </div>
+          <div id="existing-picker" hidden>
+            <input id="page-search" type="search" placeholder="Search your Notion pages…">
+            <select id="page-select" size="6" aria-label="Notion pages"></select>
+            <p class="muted small">Only pages shared with the integration show up here.</p>
+          </div>
+          <button id="notion-send" class="btn primary">Send to Notion</button>
+          <p id="notion-result"></p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">Built by Arshaan</footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
