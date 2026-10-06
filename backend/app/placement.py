@@ -11,7 +11,7 @@ import re
 import time
 from datetime import date
 
-from . import groq, notion
+from . import config, groq, notion
 from .utils import AppError
 
 # Tables whose entries are classes ("Courses", "Classes", or e.g. a template's "Domains").
@@ -65,7 +65,8 @@ def _matches_class(title: str, tokens: set[str]) -> bool:
 
 def people() -> list[dict]:
     nodes = notion.page_tree()
-    roots = [n for n in nodes if n["root"] and n["type"] == "page"]
+    roots = [n for n in nodes if n["root"] and n["type"] == "page"
+             and n["title"].strip().lower() not in config.HIDDEN_PEOPLE]
     return [{"id": n["id"], "title": n["title"], "icon": n["icon"]}
             for n in sorted(roots, key=lambda n: n["title"].lower())]
 

@@ -1,4 +1,4 @@
-from backend.app import notion, placement
+from backend.app import config, notion, placement
 from tests.fakes import H
 
 
@@ -6,8 +6,15 @@ def names(people):
     return [p["title"] for p in people]
 
 
-def test_people_are_the_top_level_pages(fake_notion):
+def test_people_are_the_top_level_pages(fake_notion, monkeypatch):
+    monkeypatch.setattr(config, "HIDDEN_PEOPLE", set())
     assert names(placement.people()) == ["Arshaan", "Efrain", "Ryan"]
+
+
+def test_hidden_people_are_left_off_the_site(fake_notion):
+    # Ryan is hidden by default (HIDDEN_PEOPLE); nothing in his Notion is changed.
+    assert names(placement.people()) == ["Arshaan", "Efrain"]
+    assert fake_notion.created == [] and fake_notion.appended == []
 
 
 def test_classes_come_from_course_tables(fake_notion, fake_ai):

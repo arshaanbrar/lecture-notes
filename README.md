@@ -19,6 +19,7 @@ You never edit code to add keys. All keys are environment variables:
 | `GROQ_API_KEY` | Groq API key (`gsk_…`) | [Step 1](#step-1--get-a-free-groq-api-key) | **Yes** |
 | `NOTION_TOKEN` | Notion integration secret (`ntn_…`) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | For Notion export |
 | `NOTION_PARENT_PAGE_ID` | A fallback page offered as a last-resort place for notes (paste its URL) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | Optional |
+| `HIDDEN_PEOPLE` | Names of people's top-level Notion pages to leave off the site, comma-separated (default `Ryan`). Their Notion isn't changed | — | Optional |
 | `APP_PASSWORD` | Optional password that every visitor must enter | You make it up | Recommended |
 
 - **Locally:** copy `.env.example` to `.env` and fill it in. `.env` is git-ignored.

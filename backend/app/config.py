@@ -36,6 +36,10 @@ NOTION_TOKEN = _env("NOTION_TOKEN")
 # ⚠️ ID — The Notion page new notes are created under (paste the page URL or its ID).
 NOTION_PARENT_PAGE_ID = _env("NOTION_PARENT_PAGE_ID")
 
+# People whose top-level Notion page is left off the site (comma-separated page titles).
+# Their Notion isn't touched; they just don't show up in "Who is it for?" or the AI's guesses.
+HIDDEN_PEOPLE = {n.strip().lower() for n in _env("HIDDEN_PEOPLE", "Ryan").split(",") if n.strip()}
+
 # Optional shared password so strangers can't use up your free quotas. Empty = no password.
 APP_PASSWORD = _env("APP_PASSWORD")
 
