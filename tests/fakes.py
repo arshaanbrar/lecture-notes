@@ -52,9 +52,13 @@ class FakeNotion:
             # Ryan: no class table, lectures are loose pages.
             page("r_uni", "UNI", P("ryan")),
             page("r1", "csc lec 3", P("ryan")), page("r2", "csc lab 3", P("ryan")), page("r3", "mgm lec 4", P("ryan")),
-            # Efrain: a plain Courses table.
+            # Efrain: a plain Courses table (shown as a gallery), plus a timetable and other non-lecture tables.
             page("acad", "Academic", P("efrain")), table("ecourses", "Courses ", P("acad")),
             page("soc", "SOCSCI 1T03", D("ecourses")),
+            table("etimes", "class timetable", P("acad")),
+            page("tt1", "SocSci 1T03 timetable", D("etimes")),
+            page("tt2", "SocSci 1T03 TUTORIAL timetable", D("etimes")),
+            table("eassess", "assesments", P("acad")), page("as1", "SOCSCI 1T03 essay notes", D("eassess")),
         ]
         self.schemas = {
             H("domains"): {"Name": {"type": "title"},
@@ -64,6 +68,8 @@ class FakeNotion:
                           "type": {"type": "select", "select": {"options": [{"name": "Studying"}, {"name": "lecture"}]}},
                           "date": {"type": "date"}, "due date": {"type": "formula"}},
             H("ecourses"): {"Name": {"type": "title"}},
+            H("etimes"): {"Name": {"type": "title"}, "Location": {"type": "rich_text"}},
+            H("eassess"): {"Name": {"type": "title"}},
         }
         self.created: list[dict] = []    # bodies of POST /pages
         self.appended: list[tuple] = []  # (block id, children)

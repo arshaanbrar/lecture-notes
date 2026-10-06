@@ -18,6 +18,9 @@ from .utils import AppError
 COURSE_TABLE = re.compile(r"course|class|subject|module|domain|unit|semester", re.I)
 # Pages/tables that hold lectures or class notes.
 LECTURE_WORDS = re.compile(r"\blec\b|\blecs?\s*\d|lecture|\bweek\s*\d|\btut|\blab\b|class notes|\bnotes?\b|topics?", re.I)
+# Tables and pages that mention classes but aren't where lecture notes belong.
+NOT_LECTURES = re.compile(r"time\s*table|schedule|calend[ae]r|assess?ments?|\bexams?\b|deadlines?|"
+                          r"\bgrades?\b|to.?dos?|\btasks?\b", re.I)
 STOP_WORDS = {"for", "and", "the", "with", "intro", "introduction", "applications", "to", "of", "in", "a", "an"}
 MAX_CANDIDATES = 6
 
@@ -92,7 +95,7 @@ def find_classes(person_id: str) -> list[dict]:
         name = table["title"]
         if notion.is_generic_title(name):
             name = notion.data_source_label(table["id"]) or name
-        if not COURSE_TABLE.search(name):
+        if not COURSE_TABLE.search(name) or NOT_LECTURES.search(name):
             continue
         for entry in notion.table_entries(table["id"])[:80]:
             key = notion.normalize_id(entry["id"])
@@ -125,7 +128,7 @@ def guess_owner(note_title: str, summary: str, usual_person_id: str = "") -> dic
         for c in find_classes(person["id"])[:40]:
             lines.append(f"   C{len(class_index)}: {c['title']}")
             class_index.append((p_num, c))
-        lectures = [n["title"] for n in nodes if n["type"] == "page" and LECTURE_WORDS.search(n["title"])
+        lectures = [n["title"] for n in nodes if n["type"] == "page" and _is_lecture_page(by_id, n)
                     and _inside(by_id, n, person["id"])][:12]
         if lectures:
             lines.append("   their lecture pages: " + "; ".join(lectures))
@@ -185,6 +188,17 @@ def _guess_class(found: list[dict], note_title: str, summary: str) -> str | None
     return found[index]["id"] if 0 <= index < len(found) and data.get("confident", True) else None
 
 
+def _is_lecture_page(by_id: dict, node: dict) -> bool:
+    return bool(LECTURE_WORDS.search(node["title"])) and not _not_for_lectures(by_id, node)
+
+
+def _not_for_lectures(by_id: dict, node: dict) -> bool:
+    """A timetable row, an assessment, an exam calendar entry… (or the table itself)."""
+    parent = _node(by_id, node.get("parent"))
+    return bool(NOT_LECTURES.search(node["title"])
+                or (parent and parent["type"] == "database" and NOT_LECTURES.search(parent["title"])))
+
+
 # ---------- where should it go ----------
 
 def plan(person_id: str, class_id: str | None, class_text: str, note_title: str, summary: str) -> dict:
@@ -213,7 +227,8 @@ def plan(person_id: str, class_id: str | None, class_text: str, note_title: str,
 
     # 1. A lectures table that links to the class (e.g. Topics, with a "domain" column -> Domains).
     if class_id and course_table:
-        tables = [n for n in mine if n["type"] == "database" and LECTURE_WORDS.search(n["title"])]
+        tables = [n for n in mine if n["type"] == "database" and LECTURE_WORDS.search(n["title"])
+                  and not NOT_LECTURES.search(n["title"])]
         for table in tables[:10]:
             info = notion.table_info(table["id"])
             column = info and notion.link_column(info, course_table)
@@ -230,8 +245,8 @@ def plan(person_id: str, class_id: str | None, class_text: str, note_title: str,
     # 2. Wherever this person's other lectures for the class already live.
     groups: dict[str, list[dict]] = {}
     for page in mine:
-        if page["type"] == "page" and page["parent"] and (_matches_class(page["title"], tokens)
-                                                            or LECTURE_WORDS.search(page["title"])):
+        if page["type"] == "page" and page["parent"] and not _not_for_lectures(by_id, page) \
+                and (_matches_class(page["title"], tokens) or LECTURE_WORDS.search(page["title"])):
             groups.setdefault(notion.normalize_id(page["parent"]), []).append(page)
     for parent_key, pages in groups.items():
         parent = by_id.get(parent_key)
@@ -253,10 +268,12 @@ def plan(person_id: str, class_id: str | None, class_text: str, note_title: str,
             add("page", parent, score, f"New page in {parent['title']}, next to your other lectures",
                 [p["title"] for p in same_class or pages])
 
-    # 3. Inside the class page itself.
+    # 3. Inside the class page itself. When the class is a card in a Courses table and there's no
+    #    lectures table, that's where the class's notes live, so it beats loose pages elsewhere.
     if class_node and class_node["type"] == "page":
         inside = [n["title"] for n in mine if notion.same_id(n.get("parent"), class_id)]
-        add("page", class_node, 30 + 3 * len(inside), f"New page inside {class_title}", inside)
+        base = 60 if course_table else 30
+        add("page", class_node, base + 3 * len(inside), f"New page inside {class_title}", inside)
 
     # 4. Last resort: the person's own page (or the site's default page).
     add("page", person, 1, f"New page in {person['title']}", [])

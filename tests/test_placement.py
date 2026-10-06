@@ -50,3 +50,14 @@ def test_sending_a_lecture_fills_in_the_tables_columns(fake_notion, fake_ai):
     assert notion.same_id(props["domain"]["relation"][0]["id"], H("dm"))
     assert props["type"] == {"select": {"name": "lecture"}}
     assert props["date"] == {"date": {"start": "2026-10-05"}}
+
+
+def test_timetables_are_not_classes_or_places_for_lectures(fake_notion, fake_ai):
+    # Efrain's "class timetable" board says "class" but its rows are timetable slots, not classes.
+    assert [c["title"] for c in placement.find_classes(H("efrain"))] == ["SOCSCI 1T03"]
+    plan = placement.plan(H("efrain"), H("soc"), "", "Social Theory", "temporality")
+    best = plan["candidates"][plan["best"]]
+    # The notes go inside the class's card in the Courses gallery.
+    assert best["kind"] == "page" and notion.same_id(best["target_id"], H("soc"))
+    for unwanted in ("etimes", "eassess"):
+        assert not any(notion.same_id(c["target_id"], H(unwanted)) for c in plan["candidates"])
