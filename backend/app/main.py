@@ -19,6 +19,16 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 app = FastAPI(title="Lecture Notes")
 
 
+@app.middleware("http")
+async def no_stale_frontend(request, call_next):
+    # Make browsers re-check the page, JS and CSS on every load (cheap: unchanged files return 304),
+    # so nobody runs an old app.js against a new index.html after a deploy.
+    response = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.exception_handler(AppError)
 async def app_error_handler(_, exc: AppError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
