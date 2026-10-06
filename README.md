@@ -57,6 +57,10 @@ Every ~15 minutes of transcript also gets its notes written right away, so at th
 
 The server has two lines of jobs, each doing one at a time: audio/video (slow), and quick jobs (notes from text the page already has, and documents). So a quick job never waits behind someone's hour-long recording. A waiting job says what it's waiting for, e.g. "Waiting for 1 other file to finish first (Transcribing… 2 of 5 parts done)".
 
+Notes start **automatically when you stop recording** (anything over 10 seconds). The recording stays on the page, so you can still download it or try again.
+
+Jobs live in the server's memory, so a restart (e.g. an update going live mid-job) forgets them. The page notices and **sends the job again by itself** once the server is back (it waits up to ~3 minutes for it). It still has everything it needs: the transcript, the file or the link.
+
 If a piece of the live transcript can't be read (e.g. a browser that records in a format that can't be cut into pieces), the recording is uploaded and transcribed in full at the end, as before.
 
 ```
@@ -249,6 +253,17 @@ LOCAL_WHISPER_MODEL=base     # tiny | base | small | medium | large-v3 (bigger =
 With Docker, build with `--build-arg LOCAL_WHISPER=true`. Groq is still used for the notes.
 
 ---
+
+## System check
+
+Open **`/check`** on your site (there's a link in the footer, and it uses the site password). It shows ✅/❌ for every part, with a reason for anything that's wrong:
+- the Groq key and the AI models (it makes one tiny real request to each);
+- Whisper;
+- the Notion connection, with the people it can see;
+- ffmpeg, the OCR tools, the PDF/PowerPoint readers and yt-dlp;
+- whether a password is set.
+
+Run it before a lecture if anything seems off.
 
 ## Troubleshooting
 

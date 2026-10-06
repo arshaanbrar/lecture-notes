@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import assistant, audio, config, jobs, notion, placement, slides, summarize
+from . import assistant, audio, check, config, jobs, notion, placement, slides, summarize
 from .utils import AppError
 
 logging.basicConfig(level=logging.INFO)
@@ -65,6 +65,13 @@ def get_config():
 @api.get("/auth/check")
 def auth_check():
     return {"ok": True}
+
+
+@api.get("/check")
+def system_check():
+    """✅/❌ for every piece the app needs (shown at /check)."""
+    items = check.run()
+    return {"ok": all(i["ok"] for i in items if i["required"]), "items": items}
 
 
 # ---------- jobs ----------
@@ -341,6 +348,12 @@ class ChatBody(BaseModel):
 def assistant_chat(body: ChatBody):
     context = body.context.model_dump()
     return {"reply": assistant.answer([m.model_dump() for m in body.messages], context)}
+
+
+@app.get("/check", include_in_schema=False)
+def check_page():
+    """The system check page (its data comes from /api/check, which needs the password)."""
+    return FileResponse(FRONTEND_DIR / "check.html", headers={"Cache-Control": "no-cache"})
 
 
 app.include_router(public)

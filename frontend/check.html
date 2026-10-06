@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>System Check</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🩺</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .checks { list-style: none; margin: 0; padding: 0; }
+    .checks li { display: grid; grid-template-columns: 1.6em 1fr; gap: 4px 8px; padding: 10px 0; border-top: 1px solid var(--border); }
+    .checks li:first-child { border-top: 0; }
+    .checks .detail { grid-column: 2; color: var(--muted); font-size: 0.9rem; overflow-wrap: anywhere; }
+    .verdict { font-size: 1.1rem; font-weight: 600; margin: 0 0 8px; }
+    .verdict.ok { color: var(--success); }
+    .verdict.bad { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <h1>🩺 System check</h1>
+    <p>Is every part of Lecture Notes working? Each check makes a small real request.</p>
+  </header>
+  <main>
+    <section class="card" id="unlock" hidden>
+      <h2>Enter password</h2>
+      <form id="unlock-form" class="row">
+        <input id="unlock-input" type="password" placeholder="Password" autocomplete="current-password" required>
+        <button class="btn primary" type="submit">Check</button>
+      </form>
+    </section>
+    <section class="card" id="report">
+      <p class="verdict" id="verdict">Checking…</p>
+      <ul class="checks" id="checks"></ul>
+      <p class="row"><button class="btn" id="again" type="button" disabled>Check again</button>
+        <a class="btn ghost" href="/">← Back to Lecture Notes</a></p>
+    </section>
+  </main>
+  <footer class="site-footer">Built by Arshaan</footer>
+  <script>
+    "use strict";
+    const PW_KEY = "lecture-notes-password"; // same as the main page
+    const $ = (s) => document.querySelector(s);
+    const getPw = () => { try { return localStorage.getItem(PW_KEY) || ""; } catch { return ""; } };
+
+    async function runCheck() {
+      $("#again").disabled = true;
+      $("#verdict").className = "verdict";
+      $("#verdict").textContent = "Checking… (takes a few seconds)";
+      $("#checks").replaceChildren();
+      let res;
+      try {
+        res = await fetch("/api/check", { headers: getPw() ? { "X-App-Password": getPw() } : {} });
+      } catch {
+        $("#verdict").textContent = "❌ Couldn't reach the server. It may be starting up: try again in a minute.";
+        $("#again").disabled = false;
+        return;
+      }
+      if (res.status === 401) {
+        $("#report").hidden = true;
+        $("#unlock").hidden = false;
+        $("#unlock-input").focus();
+        return;
+      }
+      const data = await res.json();
+      $("#verdict").className = `verdict ${data.ok ? "ok" : "bad"}`;
+      $("#verdict").textContent = data.ok ? "✅ Everything needed is working." : "❌ Something needed isn't working. See below.";
+      $("#checks").replaceChildren(...data.items.map((item) => {
+        const li = document.createElement("li");
+        const icon = document.createElement("span");
+        icon.textContent = item.ok ? "✅" : item.required ? "❌" : "⚠️";
+        const name = document.createElement("strong");
+        name.textContent = item.name + (item.required ? "" : " (optional)");
+        const detail = document.createElement("span");
+        detail.className = "detail";
+        detail.textContent = item.detail;
+        li.append(icon, name, detail);
+        return li;
+      }));
+      $("#again").disabled = false;
+    }
+
+    $("#unlock-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      try { localStorage.setItem(PW_KEY, $("#unlock-input").value); } catch { /* storage blocked */ }
+      $("#unlock").hidden = true;
+      $("#report").hidden = false;
+      runCheck();
+    });
+    $("#again").addEventListener("click", runCheck);
+    runCheck();
+  </script>
+</body>
+</html>

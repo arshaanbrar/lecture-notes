@@ -45,7 +45,11 @@ async function api(path, opts = {}) {
     lock("Please enter the password.");
     throw new Error("Password required.");
   }
-  if (!res.ok) throw new Error(errorText(data, res.status));
+  if (!res.ok) {
+    const err = new Error(errorText(data, res.status));
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -355,7 +359,12 @@ function finishRecording(rec) {
   }
   $("#rec-note").textContent = rec.backupOk ? "Saved on this device until the notes are made." : "";
   showRecording(blob, type, rec.startedAt);
+  // Start on the notes straight away (not for a few seconds recorded by accident). The recording
+  // stays below with its buttons, so it can be downloaded or tried again.
+  if (Date.now() - rec.startedAt >= AUTO_NOTES_AFTER_MS) makeNotesFromRecording();
 }
+
+const AUTO_NOTES_AFTER_MS = 10 * 1000;
 
 function showRecording(blob, type, startedAt) {
   state.blob = blob;
@@ -420,12 +429,14 @@ $("#rec-discard").addEventListener("click", () => {
   $("#rec-timer").textContent = "00:00";
 });
 
-$("#rec-process").addEventListener("click", async () => {
+async function makeNotesFromRecording() {
   if (!state.blob || state.busy) return;
   if (await processLiveTranscript()) return;
   const ext = $("#rec-download").download.split(".").pop();
   processUpload(state.blob, `recording.${ext}`, true);
-});
+}
+
+$("#rec-process").addEventListener("click", makeNotesFromRecording);
 
 // A video: upload only its sound (shrink.js). Much smaller, so much quicker to upload.
 async function shrinkVideo(file, filename) {
@@ -456,8 +467,8 @@ async function processScanOnDevice(file, filename) {
     form.append("source", "document");
     form.append("extras", chosenExtras().join(","));
     form.append("usual_person_id", recall(WHO_KEY));
-    const job = await api("/api/jobs/text", { method: "POST", body: form });
-    await pollJob(job.id);
+    const send = () => api("/api/jobs/text", { method: "POST", body: form });
+    await pollJob((await send()).id, send);
   } catch (err) {
     stopWorking();
     showError(err.message);
@@ -489,10 +500,11 @@ async function processLiveTranscript() {
     form.append("usual_person_id", recall(WHO_KEY));
     form.append("place", placement ? "false" : "true"); // already worked out during the lecture
     if (state.slides) form.append("slides_file", state.slides);
-    const job = await api("/api/jobs/text", { method: "POST", body: form });
+    const send = () => api("/api/jobs/text", { method: "POST", body: form });
+    const job = await send();
     state.fromRecording = true;
     state.earlyPlacement = placement;
-    await pollJob(job.id);
+    await pollJob(job.id, send);
   } catch (err) {
     stopWorking();
     showError(err.message);
@@ -596,8 +608,8 @@ $("#url-form").addEventListener("submit", async (e) => {
     form.append("extras", chosenExtras().join(","));
     form.append("usual_person_id", recall(WHO_KEY));
     if (state.slides) form.append("slides_file", state.slides);
-    const job = await api("/api/jobs/url", { method: "POST", body: form });
-    await pollJob(job.id);
+    const send = () => api("/api/jobs/url", { method: "POST", body: form });
+    await pollJob((await send()).id, send);
   } catch (err) {
     stopWorking();
     showError(err.message);
@@ -641,7 +653,7 @@ function uploadWithProgress(blob, filename) {
       let data = null;
       try { data = JSON.parse(xhr.responseText); } catch { /* ignore */ }
       if (xhr.status === 401) { lock("Please enter the password."); reject(new Error("Password required.")); }
-      else if (xhr.status >= 400) reject(new Error(errorText(data, xhr.status)));
+      else if (xhr.status >= 400) reject(Object.assign(new Error(errorText(data, xhr.status)), { status: xhr.status }));
       else resolve(data);
     };
     xhr.onerror = () => reject(new Error("Upload failed. Check your connection and try again."));
@@ -659,25 +671,37 @@ async function processUpload(blob, filename, fromRecording) {
   $("#upload-progress").hidden = false;
   $("#upload-fill").style.width = "0";
   try {
-    const job = await uploadWithProgress(blob, filename);
+    const send = () => uploadWithProgress(blob, filename);
+    const job = await send();
     $("#upload-progress").hidden = true;
-    await pollJob(job.id);
+    await pollJob(job.id, send);
   } catch (err) {
     stopWorking();
     showError(err.message);
   }
 }
 
-async function pollJob(id) {
-  let failures = 0;
+// Jobs live in the server's memory, so a restart (e.g. an update going live) forgets them. Then
+// `resend` starts the job again, once the server is back. Network trouble while the server
+// restarts (up to ~3 minutes) is waited out.
+const SERVER_DOWN_TRIES = 60; // × 3 s
+
+async function pollJob(id, resend) {
+  let failures = 0, resent = 0;
   while (true) {
     let job;
     try {
       job = await api(`/api/jobs/${id}`);
       failures = 0;
     } catch (err) {
-      // Tolerate brief network blips, but not "job not found".
-      if (/not found/i.test(err.message) || ++failures > 5) throw err;
+      if (err.status === 404 && resend && resent < 2) {
+        resent++;
+        $("#status-text").textContent = "The server restarted and lost this job, so sending it again…";
+        id = (await retryWhileServerDown(resend)).id;
+        continue;
+      }
+      if (err.status === 404 || err.status === 401 || ++failures > SERVER_DOWN_TRIES) throw err;
+      if (failures > 2) $("#status-text").textContent = "Can't reach the server (it may be restarting). Still trying…";
       await sleep(3000);
       continue;
     }
@@ -705,6 +729,18 @@ async function pollJob(id) {
       return;
     }
     await sleep(2000);
+  }
+}
+
+async function retryWhileServerDown(send) {
+  for (let tries = 1; ; tries++) {
+    try {
+      return await send();
+    } catch (err) {
+      // 4xx means the request itself was refused: trying again won't help.
+      if ((err.status && err.status < 500) || tries >= SERVER_DOWN_TRIES) throw err;
+      await sleep(3000);
+    }
   }
 }
 

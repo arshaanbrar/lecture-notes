@@ -338,3 +338,4 @@ body.locked .chat-fab, body.locked .chat-panel { display: none !important; }
 .rec-warning { margin: 8px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--danger-soft); color: var(--danger); font-size: 0.9rem; }
 .tip { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: var(--accent-soft); font-size: 0.9rem; }
 .tip p { margin: 0 0 6px; }
+.site-footer a { color: inherit; }
