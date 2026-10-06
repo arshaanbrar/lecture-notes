@@ -451,6 +451,33 @@ function notionMode() {
 // `ordered` holds each opened page's sub-pages in the order they appear in Notion.
 const tree = { loaded: false, nodes: new Map(), children: new Map(), ordered: new Map(), errors: new Map(), loading: new Set(), path: [] };
 
+// Linked views (e.g. a "Courses" gallery that shows the "Domains" table) can't be opened through
+// Notion's API. The user picks which table a view shows once; that's remembered on this device.
+const VIEW_SOURCES_KEY = "lecture-notes-view-sources";
+
+function viewSources() {
+  try { return JSON.parse(localStorage.getItem(VIEW_SOURCES_KEY) || "{}"); } catch { return {}; }
+}
+
+function setViewSource(viewId, sourceId) {
+  const map = viewSources();
+  if (sourceId) map[viewId] = sourceId;
+  else delete map[viewId];
+  try { localStorage.setItem(VIEW_SOURCES_KEY, JSON.stringify(map)); } catch { /* storage blocked */ }
+}
+
+function sourceFor(viewId) {
+  const id = viewSources()[viewId];
+  return id && tree.nodes.has(id) ? id : null;
+}
+
+function sourceCandidates(viewId) {
+  const page = tree.nodes.get(viewId)?.parent;
+  const tables = [...tree.nodes.values()].filter((n) => n.type === "database" && n.id !== viewId && !tree.errors.has(n.id));
+  const samePage = tables.filter((n) => pathTo(n.id).slice(0, -1).includes(page));
+  return (samePage.length ? samePage : tables).slice(0, 30);
+}
+
 function kidsOf(id) {
   const known = tree.children.get(id) || [];
   const ordered = id === null ? null : tree.ordered.get(id);
@@ -485,7 +512,7 @@ async function loadChildren(id, refresh = false) {
   } finally {
     tree.loading.delete(id);
   }
-  if (tree.path[tree.path.length - 1] === id) renderTree();
+  renderTree();
 }
 
 function nodeLabel(node) {
@@ -613,10 +640,30 @@ function renderTree() {
       loadChildren(current);
       list.innerHTML = '<li class="muted page-empty">Loading…</li>';
     }
-    const kids = kidsOf(current);
-    if (kids.length) list.replaceChildren();
+    // A view we can't open, but the user told us which table it shows: list that table instead.
+    const blockedView = current !== null && tree.errors.has(current);
+    const showing = blockedView && sourceFor(current) ? sourceFor(current) : current;
+    if (showing !== current && !tree.ordered.has(showing)) loadChildren(showing);
+
+    if (blockedView && showing === current) {
+      renderViewSourcePicker(list, current);
+      return finishRender();
+    }
+    const kids = kidsOf(showing);
+    if (kids.length || showing !== current) list.replaceChildren();
+    if (showing !== current) {
+      const note = document.createElement("li");
+      note.className = "muted page-empty";
+      const change = document.createElement("button");
+      change.type = "button";
+      change.className = "linkish";
+      change.textContent = "change";
+      change.addEventListener("click", () => { setViewSource(current, null); renderTree(); });
+      note.append(`Showing entries from ${tree.nodes.get(showing).title} (`, change, ")");
+      list.append(note);
+    }
     kids.forEach((id) => list.append(pageRow(tree.nodes.get(id))));
-    if (!kids.length && (current === null || tree.ordered.has(current))) {
+    if (!kids.length && showing === current && (current === null || tree.ordered.has(current))) {
       list.innerHTML = current
         ? '<li class="muted page-empty">No pages inside this one.</li>'
         : '<li class="muted page-empty">No pages found. Share pages with your integration in Notion.</li>';
@@ -624,6 +671,36 @@ function renderTree() {
     }
   }
 
+  finishRender();
+}
+
+function renderViewSourcePicker(list, viewId) {
+  list.replaceChildren();
+  const intro = document.createElement("li");
+  intro.className = "muted page-empty";
+  intro.textContent = "Notion doesn't let apps open this view directly. Which table does it show? (remembered on this device)";
+  list.append(intro);
+  const candidates = sourceCandidates(viewId);
+  for (const table of candidates) {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "page-row";
+    const name = document.createElement("span");
+    name.className = "page-name";
+    name.textContent = nodeLabel(table);
+    const where = document.createElement("span");
+    where.className = "page-path";
+    where.textContent = pathTo(table.parent).map((id) => tree.nodes.get(id).title).join(" › ") || "Top level";
+    btn.append(name, where);
+    btn.addEventListener("click", () => { setViewSource(viewId, table.id); renderTree(); });
+    li.append(btn);
+    list.append(li);
+  }
+  if (!candidates.length) intro.textContent = tree.errors.get(viewId);
+}
+
+function finishRender() {
   updateLectureOption();
   const target = $("#page-target");
   const creating = notionMode() === "new";
