@@ -11,6 +11,9 @@ from .utils import AppError, split_text
 
 API = "https://api.notion.com/v1"
 VERSION = "2022-06-28"
+# Newer API version, used only for tables. It understands "data sources", so it can open
+# linked views (e.g. a "Courses" gallery that shows another table) and tell their real names.
+DATA_SOURCES_VERSION = "2025-09-03"
 MAX_BLOCKS_PER_REQUEST = 100
 
 
@@ -29,12 +32,12 @@ def normalize_id(value: str) -> str:
     return hexes[-1] if hexes else ""
 
 
-def _request(method: str, path: str, body: dict | None = None) -> dict:
+def _request(method: str, path: str, body: dict | None = None, version: str = VERSION) -> dict:
     if not config.NOTION_TOKEN:
         raise AppError("Notion isn't connected yet. The site owner needs to set NOTION_TOKEN (see README).")
     headers = {
         "Authorization": f"Bearer {config.NOTION_TOKEN}",
-        "Notion-Version": VERSION,
+        "Notion-Version": version,
         "Content-Type": "application/json",
     }
     for attempt in range(5):
@@ -105,6 +108,7 @@ def page_tree(refresh: bool = False) -> list[dict]:
         return _tree_cache["nodes"]
     if refresh:
         _children_cache.clear()
+        _sources_cache.clear()
 
     results, cursor = [], None
     for _ in range(MAX_SEARCH_REQUESTS):
@@ -187,10 +191,10 @@ def _page_children(page_id: str) -> list[dict]:
                                   "title": block["child_page"].get("title") or "Untitled", "hidden": hidden})
                 elif kind == "child_database":
                     title = block["child_database"].get("title", "").strip()
-                    if nearby and (not title or title.startswith("View of ")):
-                        title = nearby
+                    if _is_generic_title(title):
+                        title = nearby or _data_source_label(block["id"]) or "Untitled table"
                     found.append({"id": block["id"], "type": "database", "icon": icons.get(block["id"], ""),
-                                  "title": title or "Untitled table", "hidden": hidden})
+                                  "title": title, "hidden": hidden})
                 elif kind in CONTAINER_BLOCKS and block.get("has_children") and depth < MAX_CONTAINER_DEPTH:
                     # Layout blocks (columns) have no text of their own, so they keep the nearby label.
                     layout = kind in ("column_list", "column", "synced_block")
@@ -206,12 +210,41 @@ def _page_children(page_id: str) -> list[dict]:
     return found
 
 
-def _database_children(database_id: str) -> list[dict]:
+GENERIC_TITLES = {"", "untitled", "untitled table", "untitled database", "new database", "new table"}
+
+_sources_cache: dict[str, list[dict]] = {}
+
+
+def _is_generic_title(title: str) -> bool:
+    t = title.strip().lower()
+    return t in GENERIC_TITLES or t.startswith("view of ")
+
+
+def _data_sources(database_id: str) -> list[dict]:
+    """The table(s) a database block shows. A linked view's source is another table."""
+    if database_id not in _sources_cache:
+        try:
+            db = _request("GET", f"/databases/{database_id}", version=DATA_SOURCES_VERSION)
+            _sources_cache[database_id] = db.get("data_sources", [])
+        except AppError:
+            _sources_cache[database_id] = []
+    return _sources_cache[database_id]
+
+
+def _data_source_label(database_id: str) -> str:
+    names = [s.get("name", "").strip() for s in _data_sources(database_id)]
+    names = [n for n in names if not _is_generic_title(n) and not n.lower().startswith("new data source")]
+    return " + ".join(names)
+
+
+def _query_pages(path: str, version: str) -> list[dict]:
     found, cursor = [], None
     for _ in range(5):  # up to 500 entries
         body = {"page_size": 100, **({"start_cursor": cursor} if cursor else {})}
-        data = _request("POST", f"/databases/{database_id}/query", body)
+        data = _request("POST", path, body, version=version)
         for page in data.get("results", []):
+            if page.get("object") != "page" or page.get("in_trash") or page.get("archived"):
+                continue
             icon = page.get("icon") or {}
             found.append({"id": page["id"], "type": "page", "title": _title(page),
                           "icon": icon.get("emoji", "") if icon.get("type") == "emoji" else ""})
@@ -219,6 +252,23 @@ def _database_children(database_id: str) -> list[dict]:
             break
         cursor = data.get("next_cursor")
     return found
+
+
+def _database_children(database_id: str) -> list[dict]:
+    sources = _data_sources(database_id)
+    if sources:
+        pages, seen = [], set()
+        for source in sources[:4]:
+            try:
+                for page in _query_pages(f"/data_sources/{source['id']}/query", DATA_SOURCES_VERSION):
+                    if page["id"] not in seen:
+                        seen.add(page["id"])
+                        pages.append(page)
+            except AppError:
+                continue
+        if pages:
+            return pages
+    return _query_pages(f"/databases/{database_id}/query", VERSION)
 
 
 def children(parent_id: str, kind: str, refresh: bool = False) -> list[dict]:
