@@ -32,6 +32,15 @@
     </section>
 
     <div id="app">
+      <section class="card recover" id="recover-card" hidden>
+        <strong>⚠️ Unfinished recording found</strong>
+        <p class="muted" id="recover-text"></p>
+        <div class="row">
+          <button id="recover-yes" class="btn primary">Recover it</button>
+          <button id="recover-no" class="btn ghost">Delete it</button>
+        </div>
+      </section>
+
       <section class="card" id="input-card">
         <div class="tabs" role="tablist">
           <button class="tab" role="tab" data-tab="record" aria-selected="true">🎙️ Record</button>
@@ -62,6 +71,7 @@
             <span id="rec-timer" class="timer">00:00</span>
             <div class="meter" aria-hidden="true"><div id="meter-fill"></div></div>
           </div>
+          <p id="rec-note" class="hint"></p>
 
           <div id="recording-ready" class="ready" hidden>
             <audio id="rec-preview" controls></audio>
@@ -157,11 +167,17 @@
             <button type="button" class="linkish" id="notion-refresh">Refresh</button></p>
         </div>
       </section>
+      <section class="card" id="history-card" hidden>
+        <h2>Recent notes</h2>
+        <p class="muted small">Saved on this device only. Open one to read it again or send it to Notion.</p>
+        <ul id="history-list" class="history"></ul>
+      </section>
     </div>
   </main>
 
   <footer class="site-footer">Built by Arshaan</footer>
 
+  <script src="store.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

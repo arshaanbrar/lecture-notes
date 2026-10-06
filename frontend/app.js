@@ -134,6 +134,7 @@ function pickMimeType() {
 
 async function startRecording() {
   clearError();
+  if (state.pendingBackup && !confirm("You have an unfinished recording saved on this device. Starting a new one will delete it. Continue?")) return;
   const source = state.source;
   // Create the AudioContext inside the click so browsers let it start.
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -177,11 +178,23 @@ async function startRecording() {
   }
 
   const mimeType = pickMimeType();
-  const recorder = new MediaRecorder(dest.stream, mimeType ? { mimeType, audioBitsPerSecond: 64000 } : undefined);
+  // 32 kbps Opus is plenty for speech (~15 MB per hour).
+  const recorder = new MediaRecorder(dest.stream, mimeType ? { mimeType, audioBitsPerSecond: 32000 } : undefined);
   const rec = { recorder, streams: [sysStream, micStream], ctx, chunks: [], startedAt: Date.now(), mimeType: recorder.mimeType || mimeType };
   state.rec = rec;
 
-  recorder.ondataavailable = (e) => { if (e.data && e.data.size) rec.chunks.push(e.data); };
+  // Back up every second of audio on this device, so a crash or closed tab doesn't lose it.
+  hideRecoverCard();
+  rec.backupOk = true;
+  rec.backup = store.backupStart({ startedAt: rec.startedAt, mimeType: rec.mimeType }).catch(() => backupFailed(rec));
+  recorder.ondataavailable = (e) => {
+    if (!e.data || !e.data.size) return;
+    rec.chunks.push(e.data);
+    if (!rec.backupOk) return;
+    const seconds = (Date.now() - rec.startedAt) / 1000;
+    rec.backup = rec.backup.then(() => rec.backupOk && store.backupChunk(e.data, seconds)).catch(() => backupFailed(rec));
+  };
+  keepScreenOn();
   recorder.onstop = () => finishRecording(rec);
   // If the user clicks the browser's own "Stop sharing" button, stop recording too.
   [sysStream, micStream].forEach((s) => s && s.getTracks().forEach((t) => t.addEventListener("ended", stopRecording)));
@@ -205,6 +218,38 @@ async function startRecording() {
   draw();
 }
 
+function backupFailed(rec) {
+  if (!rec.backupOk) return;
+  rec.backupOk = false;
+  $("#rec-note").textContent = "⚠️ This browser won't let the site save a backup, so keep this tab open until you stop.";
+}
+
+// ----- keep the screen on while recording (phones stop recording when the screen locks) -----
+
+async function keepScreenOn() {
+  const note = $("#rec-note");
+  if (!("wakeLock" in navigator)) {
+    note.textContent = "Keep your screen on while recording. This browser can't keep it awake automatically.";
+    return;
+  }
+  try {
+    state.wakeLock = await navigator.wakeLock.request("screen");
+    note.textContent = "Your screen will stay on while recording, and the audio is backed up on this device.";
+  } catch {
+    note.textContent = "Keep your screen on while recording. Phones can stop recording when the screen locks.";
+  }
+}
+
+function releaseScreen() {
+  if (state.wakeLock) state.wakeLock.release().catch(() => {});
+  state.wakeLock = null;
+}
+
+// The wake lock is dropped when the tab is hidden; take it back when the user returns.
+document.addEventListener("visibilitychange", () => {
+  if (state.rec && document.visibilityState === "visible") keepScreenOn();
+});
+
 function stopRecording() {
   const rec = state.rec;
   if (rec && rec.recorder.state !== "inactive") rec.recorder.stop();
@@ -216,6 +261,7 @@ function finishRecording(rec) {
   stopStreams(rec.streams);
   rec.ctx.close();
   state.rec = null;
+  releaseScreen();
 
   $("#rec-btn").textContent = "● Start recording";
   $("#rec-btn").classList.remove("recording");
@@ -223,25 +269,73 @@ function finishRecording(rec) {
   setBusy(state.busy);
 
   const type = rec.mimeType || "audio/webm";
-  state.blob = new Blob(rec.chunks, { type });
-  if (!state.blob.size) {
+  const blob = new Blob(rec.chunks, { type });
+  if (!blob.size) {
     showError("Nothing was recorded. Check your audio source and try again.");
     return;
   }
+  $("#rec-note").textContent = rec.backupOk ? "Saved on this device until the notes are made." : "";
+  showRecording(blob, type, rec.startedAt);
+}
+
+function showRecording(blob, type, startedAt) {
+  state.blob = blob;
   const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
-  const url = URL.createObjectURL(state.blob);
-  const stamp = new Date().toISOString().slice(0, 16).replace("T", "_").replace(":", "-");
+  const url = URL.createObjectURL(blob);
+  const d = new Date(startedAt), pad = (n) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}`;
   $("#rec-preview").src = url;
   $("#rec-download").href = url;
   $("#rec-download").download = `recording_${stamp}.${ext}`;
   $("#recording-ready").hidden = false;
 }
 
+// ----- recovering a recording after a crash / closed tab -----
+
+const BACKUP_MAX_AGE = 2 * 24 * 3600 * 1000; // older backups are deleted automatically
+
+async function checkForBackup() {
+  let saved = null;
+  try { saved = await store.backupLoad(); } catch { return; }
+  if (!saved) return;
+  if (Date.now() - saved.info.startedAt > BACKUP_MAX_AGE) {
+    store.backupClear().catch(() => {});
+    return;
+  }
+  state.pendingBackup = saved;
+  const when = new Date(saved.info.startedAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+  $("#recover-text").textContent = `Started ${when}, about ${fmtTime(saved.info.seconds || 0)} long. It was saved on this device in case the tab closed.`;
+  $("#recover-card").hidden = false;
+}
+
+function hideRecoverCard() {
+  state.pendingBackup = null;
+  $("#recover-card").hidden = true;
+}
+
+$("#recover-yes").addEventListener("click", () => {
+  const { info, blob } = state.pendingBackup;
+  hideRecoverCard();
+  $$(".tab").find((t) => t.dataset.tab === "record").click();
+  $("#rec-timer").textContent = fmtTime(info.seconds || 0);
+  $("#rec-note").textContent = "Recovered. Click Transcribe & write notes.";
+  showRecording(blob, info.mimeType || "audio/webm", info.startedAt);
+  $("#recording-ready").scrollIntoView({ behavior: "smooth", block: "center" });
+});
+
+$("#recover-no").addEventListener("click", () => {
+  if (!confirm("Delete the unfinished recording? This can't be undone.")) return;
+  hideRecoverCard();
+  store.backupClear().catch(() => {});
+});
+
 $("#rec-btn").addEventListener("click", () => (state.rec ? stopRecording() : startRecording()));
 
 $("#rec-discard").addEventListener("click", () => {
   if (!confirm("Discard this recording?")) return;
   state.blob = null;
+  store.backupClear().catch(() => {});
+  $("#rec-note").textContent = "";
   $("#recording-ready").hidden = true;
   $("#rec-timer").textContent = "00:00";
 });
@@ -249,7 +343,7 @@ $("#rec-discard").addEventListener("click", () => {
 $("#rec-process").addEventListener("click", () => {
   if (!state.blob) return;
   const ext = $("#rec-download").download.split(".").pop();
-  processUpload(state.blob, `recording.${ext}`);
+  processUpload(state.blob, `recording.${ext}`, true);
 });
 
 window.addEventListener("beforeunload", (e) => {
@@ -276,7 +370,7 @@ const dz = $("#dropzone");
 ["dragleave", "drop"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("drag"); }));
 dz.addEventListener("drop", (e) => setFile(e.dataTransfer.files[0]));
 
-$("#file-process").addEventListener("click", () => state.file && processUpload(state.file, state.file.name));
+$("#file-process").addEventListener("click", () => state.file && processUpload(state.file, state.file.name, false));
 
 $("#url-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -337,8 +431,9 @@ function uploadWithProgress(blob, filename) {
   });
 }
 
-async function processUpload(blob, filename) {
+async function processUpload(blob, filename, fromRecording) {
   clearError();
+  state.fromRecording = fromRecording;
   startWorking("Uploading…");
   $("#upload-progress").hidden = false;
   $("#upload-fill").style.width = "0";
@@ -368,7 +463,15 @@ async function pollJob(id) {
     $("#status-text").textContent = job.message;
     if (job.status === "done" || job.status === "error") {
       stopWorking();
-      if (job.transcript) showResults(job);
+      if (job.transcript) {
+        // The notes exist now, so the recording backup is no longer needed.
+        if (state.fromRecording) {
+          store.backupClear().catch(() => {});
+          $("#rec-note").textContent = "";
+        }
+        showResults(job);
+        saveToHistory(job);
+      }
       if (job.status === "error") {
         showError(job.transcript ? `Transcript is ready, but notes failed: ${job.error}` : job.error);
       }
@@ -399,6 +502,7 @@ function fillList(el, items, empty) {
 function showResults(job) {
   const notes = job.notes || { title: job.label || "Notes", summary: "", key_points: [], action_items: [] };
   state.result = { transcript: job.transcript, notes };
+  state.historyId = job.id;
   $("#note-title").value = notes.title || "Notes";
   $("#note-summary").textContent = notes.summary || "—";
   fillList($("#note-points"), notes.key_points || [], "—");
@@ -637,6 +741,9 @@ $("#notion-send").addEventListener("click", async () => {
     a.rel = "noopener";
     a.textContent = "Open in Notion ↗";
     $("#notion-result").replaceChildren("✅ Saved to Notion. ", a);
+    if (state.historyId) {
+      store.historyUpdate(state.historyId, { notion: { url, where: place.label } }).then(renderHistory).catch(() => {});
+    }
   } catch (err) {
     showError(err.message);
   } finally {
@@ -645,12 +752,71 @@ $("#notion-send").addEventListener("click", async () => {
   }
 });
 
+// ---------- recent notes (saved on this device) ----------
+
+async function saveToHistory(job) {
+  const notes = state.result.notes;
+  try {
+    await store.historySave({ id: job.id, date: Date.now(), title: notes.title || job.label || "Notes",
+                              notes, transcript: job.transcript, notion: null });
+  } catch { /* storage blocked: no history, everything else still works */ }
+  renderHistory();
+}
+
+async function renderHistory() {
+  let items = [];
+  try { items = await store.historyList(); } catch { /* no storage */ }
+  const list = $("#history-list");
+  list.replaceChildren();
+  for (const item of items) {
+    const li = document.createElement("li");
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "history-open";
+    const title = document.createElement("span");
+    title.className = "history-title";
+    title.textContent = item.title;
+    const meta = document.createElement("span");
+    meta.className = "muted small";
+    const when = new Date(item.date).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    meta.textContent = item.notion ? `${when} · ✓ Sent to Notion` : when;
+    open.append(title, meta);
+    open.addEventListener("click", () => {
+      clearError();
+      showResults({ id: item.id, label: item.title, notes: item.notes, transcript: item.transcript });
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-btn";
+    remove.setAttribute("aria-label", `Delete ${item.title}`);
+    remove.textContent = "×";
+    remove.addEventListener("click", async () => {
+      if (!confirm(`Delete “${item.title}” from this device? (Anything already in Notion stays there.)`)) return;
+      await store.historyDelete(item.id).catch(() => {});
+      renderHistory();
+    });
+    li.append(open, remove);
+    list.append(li);
+  }
+  $("#history-card").hidden = !items.length;
+}
+
+// Keep the saved copy's title in sync when the user edits it.
+$("#note-title").addEventListener("change", () => {
+  if (!state.historyId || !state.result) return;
+  const title = $("#note-title").value.trim() || "Notes";
+  state.result.notes = { ...state.result.notes, title };
+  store.historyUpdate(state.historyId, { title, notes: state.result.notes }).then(renderHistory).catch(() => {});
+});
+
 // ---------- startup ----------
 
 $("#error-close").addEventListener("click", clearError);
 
 async function init() {
   selectSource("mic");
+  checkForBackup();
+  renderHistory();
   if (!navigator.mediaDevices?.getDisplayMedia) {
     $$('.source[data-source="system"], .source[data-source="both"]').forEach((b) => {
       b.disabled = true;

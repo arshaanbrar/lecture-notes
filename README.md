@@ -141,8 +141,10 @@ To change a key later, go to your service → **Environment** → edit the value
 
 ### Free-tier things to know
 
-- **The site goes to sleep.** Render stops free services after 15 minutes with no visitors. The next visit takes 30–60 seconds to wake it up, and the page shows a "couldn't reach the server" message until it's awake. This is normal.
-- **Long recordings are fine.** The browser records locally, and the server only works on the file after you click *Transcribe*. Use **Save recording** if you want a backup copy of the audio.
+- **Kept awake for free.** Render stops free services after 15 minutes with no visitors, and the next visit then takes 30–60 seconds. The included GitHub Action (`.github/workflows/keep-awake.yml`) pings the site every 10 minutes so it stays awake. If you deploy under a different URL, change the URL in that file. GitHub pauses scheduled actions in repos with no activity for 60 days; re-enable it under the repo's **Actions** tab if that happens.
+- **Long recordings are fine, and crash-safe.** The browser records locally and backs the audio up on the device every second (about 15 MB per hour). If the tab closes or the laptop dies mid-lecture, the next visit offers **Recover it**. The backup is deleted once the notes are made, when you discard it, or after 2 days.
+- **Screen stays on while recording** in browsers that support it (Chrome, Edge, Safari 16.4+), since phones stop recording when the screen locks.
+- **Recent notes** are kept on each device (the last 30). Reopen one to read it again or send it to Notion later.
 - **One job at a time.** Jobs queue up, which keeps the small free server from running out of memory.
 - **Results aren't stored on the server.** Results stay in your browser tab, and in Notion once exported. A server restart (deploy or sleep) cancels in-progress jobs.
 - **Railway:** it no longer has a permanent free plan (only trial credits), so this project targets Render.

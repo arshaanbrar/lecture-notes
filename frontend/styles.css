@@ -226,3 +226,18 @@ body.locked #app { display: none; }
 .plan-other { margin: 12px 0 16px; }
 .plan-other summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.95rem; }
 .plan-other select { margin-top: 8px; }
+
+/* Recovering an unfinished recording */
+.recover { border-color: var(--accent); }
+.recover p { margin: 6px 0 0; }
+
+/* Recent notes */
+.history { list-style: none; margin: 0; padding: 0; }
+.history li { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); }
+.history li:first-child { border-top: 0; }
+.history-open {
+  flex: 1; min-width: 0; font: inherit; color: var(--text); background: none; border: 0;
+  padding: 10px 4px; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+}
+.history-open:hover .history-title { color: var(--accent); }
+.history-title { font-weight: 600; overflow-wrap: anywhere; }
