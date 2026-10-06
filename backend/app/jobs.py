@@ -1,6 +1,8 @@
 """In-memory background jobs: download → convert → transcribe → summarise (or read a document → summarise).
 
-One job runs at a time so a small free-tier server isn't overwhelmed; others wait in line.
+Two lines, one job at a time in each so a small free-tier server isn't overwhelmed: audio and video
+(slow: converting and transcribing), and quick jobs (text the page already has, and documents), so a
+quick job never waits behind someone's hour-long recording.
 Jobs live in memory only — the browser keeps the results once they're done.
 """
 
@@ -21,7 +23,7 @@ log = logging.getLogger(__name__)
 
 JOB_TTL_SECONDS = 6 * 3600
 
-_executor = ThreadPoolExecutor(max_workers=1)
+_lanes = {"audio": ThreadPoolExecutor(max_workers=1), "quick": ThreadPoolExecutor(max_workers=1)}
 _jobs: dict[str, "Job"] = {}
 _lock = threading.Lock()
 
@@ -38,6 +40,7 @@ class Job:
     warning: str = ""  # something non-fatal the user should know (e.g. unreadable slides)
     source: str = "recording"  # "recording" or "document" (a PDF, Word file… summarised directly)
     placement: dict | None = None  # who/which class/where in Notion, worked out while the notes were written
+    lane: str = "audio"  # which line it waits in: "audio" or "quick"
     created: float = field(default_factory=time.time)
 
     def update(self, status: str | None = None, message: str | None = None) -> None:
@@ -51,7 +54,7 @@ class Job:
             "id": self.id,
             "label": self.label,
             "status": self.status,
-            "message": self.message,
+            "message": _waiting_message(self) if self.status == "queued" else self.message,
             "transcript": self.transcript,
             "notes": self.notes,
             "error": self.error,
@@ -59,6 +62,18 @@ class Job:
             "source": self.source,
             "placement": self.placement,
         }
+
+
+def _waiting_message(job: Job) -> str:
+    """What a queued job is waiting for, e.g. "Waiting for 1 other file to finish (Transcribing… 2 of 5 parts done)"."""
+    with _lock:
+        ahead = [j for j in _jobs.values() if j.lane == job.lane and j.id != job.id
+                 and j.status not in ("done", "error") and j.created <= job.created]
+    if not ahead:
+        return "Starting…"
+    running = next((j for j in ahead if j.status != "queued"), None)
+    files = "1 other file" if len(ahead) == 1 else f"{len(ahead)} other files"
+    return f"Waiting for {files} to finish first" + (f" ({running.message})" if running else "")
 
 
 def new_workdir() -> Path:
@@ -76,6 +91,8 @@ class Options:
     place: bool = True          # also work out where in Notion it goes, alongside the notes
     usual_person_id: str = ""   # who this device usually sends notes for (breaks ties)
     source: str = "recording"   # for text sent by the page: "recording" (live transcript) or "document"
+    parts: list[dict] | None = None  # notes the page had written during the recording...
+    parts_chars: int = 0             # ...for this much of the transcript
 
 
 def submit_file(path: Path, workdir: Path, label: str, options: Options) -> Job:
@@ -93,13 +110,14 @@ def submit_text(text: str, workdir: Path, label: str, options: Options) -> Job:
 
 def _submit(label: str, workdir: Path, options: Options, path: Path | None = None, url: str | None = None,
             text: str | None = None) -> Job:
-    job = Job(id=uuid.uuid4().hex, label=label)
+    quick = text is not None or (path is not None and documents.is_document(path))
+    job = Job(id=uuid.uuid4().hex, label=label, lane="quick" if quick else "audio")
     with _lock:
         cutoff = time.time() - JOB_TTL_SECONDS
         for old_id in [k for k, j in _jobs.items() if j.created < cutoff]:
             del _jobs[old_id]
         _jobs[job.id] = job
-    _executor.submit(_run, job, workdir, options, path, url, text)
+    _lanes[job.lane].submit(_run, job, workdir, options, path, url, text)
     return job
 
 
@@ -161,7 +179,8 @@ def _run(job: Job, workdir: Path, options: Options, path: Path | None, url: str 
                 job.warning = str(e)
 
         job.update("summarizing", "Writing notes…")
-        job.notes = summarize.make_notes(text, progress, slides_text, extras, warn, source=job.source)
+        job.notes = summarize.make_notes(text, progress, slides_text, extras, warn, source=job.source,
+                                         parts=options.parts, parts_chars=options.parts_chars)
         if placing:
             progress("Finding where it goes in Notion…")
             placing.join(PLACEMENT_WAIT_SECONDS)

@@ -4,7 +4,9 @@
 // 1. Every few minutes, the new audio is transcribed, so when recording stops only the last
 //    few minutes are left. The notes are then written from this transcript; the full
 //    recording doesn't need uploading or transcribing again.
-// 2. Once there's enough to go on, the AI guesses whose lecture it is, which class, and where it
+// 2. Each time ~15 minutes of transcript build up, the notes for that part are written straight
+//    away, so at the end only the last part and combining them are left.
+// 3. Once there's enough to go on, the AI guesses whose lecture it is, which class, and where it
 //    goes in Notion, and checks again as the lecture goes on until it's sure. By the time the notes
 //    are ready, Send to Notion is too.
 // If anything goes wrong with this, the recording is simply uploaded and transcribed at the end
@@ -33,6 +35,9 @@ function newLive(rec) {
     lastGuess: "",
     sure: false,       // two guesses in a row agreed, so stop asking
     placement: null,   // { person_id, class_id, class_name, plan, plan_for }
+    parts: [],         // notes written so far, one per part of the transcript...
+    partsEnd: 0,       // ...covering transcript.slice(0, partsEnd)
+    noting: null,      // the part notes in progress
   };
 }
 
@@ -40,7 +45,8 @@ function liveStart(rec) {
   clearInterval(live.timer);
   Object.assign(live, newLive(rec));
   $("#live-guess").hidden = true;
-  live.timer = setInterval(() => liveSync(rec).then(() => liveGuess(rec)).catch(() => {}), LIVE_EVERY_MS);
+  live.timer = setInterval(() => liveSync(rec).then(() => Promise.all([liveNotes(rec), liveGuess(rec)])).catch(() => {}),
+                           LIVE_EVERY_MS);
 }
 
 // Recording stopped: transcribe what's left straight away, so it's ready when they click.
@@ -80,6 +86,40 @@ async function syncOnce(rec) {
   }
   live.synced = upTo;
   if (result.text) live.transcript += (live.transcript ? " " : "") + result.text;
+}
+
+// Write the notes for each full part of the transcript as soon as it's there (same part size as the
+// server uses), so at the end only the rest is left. A part that fails is tried again next time.
+function liveNotes(rec) {
+  if (live.noting) return live.noting;
+  live.noting = (async () => {
+    const size = state.config?.summary_chunk_chars || 12000;
+    while (live.recId === rec.startedAt && live.transcript.length - live.partsEnd >= size) {
+      const end = partEnd(live.transcript, live.partsEnd, size);
+      const { notes } = await postJson("/api/live/part-notes",
+                                       { text: live.transcript.slice(live.partsEnd, end), index: live.parts.length + 1 });
+      if (live.recId !== rec.startedAt) return;
+      live.parts.push(notes);
+      live.partsEnd = end;
+    }
+  })().finally(() => { live.noting = null; });
+  return live.noting;
+}
+
+// Where a part should end: at a sentence end (or at least a space) near the size limit.
+function partEnd(text, start, size) {
+  const limit = start + size;
+  const window = text.slice(start + Math.floor(size * 0.7), limit);
+  const sentence = Math.max(window.lastIndexOf(". "), window.lastIndexOf("? "), window.lastIndexOf("! "));
+  const at = sentence >= 0 ? sentence + 2 : window.lastIndexOf(" ") + 1;
+  return at > 0 ? start + Math.floor(size * 0.7) + at : limit;
+}
+
+// The notes written during the recording, to send with the transcript.
+async function livePartsFor(startedAt) {
+  if (live.recId !== startedAt) return { parts: [], partsEnd: 0 };
+  try { await live.noting; } catch { /* use the parts that are done */ }
+  return { parts: live.parts, partsEnd: live.partsEnd };
 }
 
 // The start and the latest part of what was said, like placement.excerpt on the server.

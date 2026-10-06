@@ -67,6 +67,11 @@ PART_PROMPT = (
     "This is part {i} of {n} of a longer transcript. Write notes for this part only.\n\n"
     "{schema}\n\nTRANSCRIPT PART {i}:\n{text}"
 )
+# Written while the lecture is still being recorded, a part at a time (see part_notes).
+LIVE_PART_PROMPT = (
+    "This is part {i} of a longer lecture transcript; more parts may follow. Write notes for this part "
+    "only.\n\n{schema}\n\nTRANSCRIPT PART {i}:\n{text}"
+)
 MERGE_PROMPT = (
     "Below are notes written for consecutive parts of one recording, in order. Merge them into "
     "one set of notes for the whole recording: combine the summaries into one, and remove duplicate "
@@ -84,13 +89,22 @@ def _with_slides(prompt: str, slides: str, limit: int) -> str:
     return prompt + SLIDES_NOTE.format(slides=slides[:limit]) if slides.strip() else prompt
 
 
+def part_notes(text: str, index: int, progress: Progress = lambda _: None) -> dict:
+    """Notes for one part of a lecture that's still being recorded. Sent back with the full transcript
+    at the end (make_notes `parts`), so only the last part and the merge are left to do then."""
+    return _ask(LIVE_PART_PROMPT.format(i=index, schema=SCHEMA, text=text), progress)
+
+
 def make_notes(transcript: str, progress: Progress, slides: str = "", extras: list[str] | None = None,
-               warn: Progress = lambda _: None, source: str = "recording") -> dict:
-    """`source` is "recording" (a transcript) or "document" (text read from a PDF, Word file…)."""
+               warn: Progress = lambda _: None, source: str = "recording",
+               parts: list[dict] | None = None, parts_chars: int = 0) -> dict:
+    """`source` is "recording" (a transcript) or "document" (text read from a PDF, Word file…).
+    `parts` are notes already written during the recording for transcript[:parts_chars]."""
     note = DOCUMENT_NOTE if source == "document" else ""
     wanted = [e for e in (extras or []) if e in EXTRAS]
+    done = (parts, parts_chars) if parts and 0 < parts_chars <= len(transcript) else None
     notes = None
-    if wanted and len(split_text(transcript, config.SUMMARY_CHUNK_CHARS)) <= 1:
+    if wanted and not done and len(split_text(transcript, config.SUMMARY_CHUNK_CHARS)) <= 1:
         # Short enough for one request: make the notes and the extras together (one AI call, not two).
         progress("Writing notes and study extras…")
         schema = SCHEMA + "\n" + "\n".join(f'"{key}": {EXTRAS[key][0]}' for key in wanted)
@@ -101,7 +115,7 @@ def make_notes(transcript: str, progress: Progress, slides: str = "", extras: li
         except AppError:
             pass  # try again the usual way: the notes first, then the extras on their own
     if notes is None:
-        notes = _base_notes(transcript, progress, slides, note)
+        notes = _base_notes(transcript, progress, slides, note, done)
     if wanted:
         progress("Making study extras…")
         try:
@@ -114,18 +128,27 @@ def make_notes(transcript: str, progress: Progress, slides: str = "", extras: li
     return notes
 
 
-def _base_notes(transcript: str, progress: Progress, slides: str, note: str = "") -> dict:
+def _base_notes(transcript: str, progress: Progress, slides: str, note: str = "",
+                done: tuple[list[dict], int] | None = None) -> dict:
     limit = config.SUMMARY_CHUNK_CHARS
-    chunks = split_text(transcript, limit)
-    if len(chunks) <= 1:
-        progress("Writing notes…")
-        prompt = FULL_PROMPT.format(schema=SCHEMA, text=transcript)
-        return _ask(note + _with_slides(prompt, slides, SINGLE_SLIDES_CHARS), progress)
+    if done:
+        # Most of it was written during the lecture: only the rest of the transcript is left.
+        partials, covered = [_clean(p) for p in done[0]], done[1]
+        rest = split_text(transcript[covered:], limit) if len(transcript[covered:].split()) >= 30 else []
+        for chunk in rest:
+            progress("Writing notes for the end of the lecture…")
+            partials.append(_ask(LIVE_PART_PROMPT.format(i=len(partials) + 1, schema=SCHEMA, text=chunk), progress))
+    else:
+        chunks = split_text(transcript, limit)
+        if len(chunks) <= 1:
+            progress("Writing notes…")
+            prompt = FULL_PROMPT.format(schema=SCHEMA, text=transcript)
+            return _ask(note + _with_slides(prompt, slides, SINGLE_SLIDES_CHARS), progress)
 
-    partials = []
-    for i, chunk in enumerate(chunks, 1):
-        progress(f"Writing notes… part {i} of {len(chunks)}")
-        partials.append(_ask(note + PART_PROMPT.format(i=i, n=len(chunks), schema=SCHEMA, text=chunk), progress))
+        partials = []
+        for i, chunk in enumerate(chunks, 1):
+            progress(f"Writing notes… part {i} of {len(chunks)}")
+            partials.append(_ask(note + PART_PROMPT.format(i=i, n=len(chunks), schema=SCHEMA, text=chunk), progress))
 
     progress("Combining notes…")
     # If the part notes are themselves too long for one request, merge them in groups first.

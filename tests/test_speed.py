@@ -106,3 +106,56 @@ def test_a_scan_read_on_the_device_is_summarised_as_a_document(client, fake_ai):
     job = wait_for_job(client, job["id"])
     assert job["status"] == "done" and job["source"] == "document" and job["notes"]["source"] == "document"
     assert any(p.startswith("Note: the input below is the text of a document") for p in fake_ai.prompts)
+
+
+def test_quick_jobs_dont_wait_behind_recordings_and_waiting_says_why(client, stub_audio, fake_ai, monkeypatch):
+    import threading
+    release = threading.Event()
+
+    def slow_transcribe(path, workdir, progress):
+        progress("Transcribing… 1 of 5 parts done")
+        release.wait(10)
+        return "Today: proof by induction."
+    monkeypatch.setattr(transcribe, "transcribe", slow_transcribe)
+    try:
+        first = client.post("/api/jobs/upload", files={"file": ("long.webm", b"audio")}).json()
+        second = client.post("/api/jobs/upload", files={"file": ("next.webm", b"audio")}).json()
+        deadline = time.time() + 5
+        while client.get(f"/api/jobs/{first['id']}").json()["status"] != "transcribing" and time.time() < deadline:
+            time.sleep(0.02)
+        waiting = client.get(f"/api/jobs/{second['id']}").json()
+        assert waiting["status"] == "queued"
+        assert waiting["message"] == "Waiting for 1 other file to finish first (Transcribing… 1 of 5 parts done)"
+        # Notes from text (a live recording, or a scan read on the device) go straight through.
+        quick = client.post("/api/jobs/text", data={"transcript": LECTURE, "place": "false"}).json()
+        assert wait_for_job(client, quick["id"], timeout=5)["status"] == "done"
+        assert client.get(f"/api/jobs/{first['id']}").json()["status"] == "transcribing"
+    finally:
+        release.set()
+    assert wait_for_job(client, second["id"])["status"] == "done"
+
+
+def test_notes_written_during_the_lecture_leave_only_the_end_and_the_merge(fake_ai, monkeypatch):
+    monkeypatch.setattr(config, "SUMMARY_CHUNK_CHARS", 1000)
+    transcript = "Week one covers sets and logic. " * 60 + "Finally we started induction proofs today. " * 10
+    covered = len("Week one covers sets and logic. " * 60)
+    parts = [summarize.part_notes(transcript[:covered // 2], 1), summarize.part_notes(transcript[covered // 2:covered], 2)]
+    fake_ai.prompts.clear()
+    notes = summarize.make_notes(transcript, lambda _: None, parts=parts, parts_chars=covered)
+    assert notes["title"] == "Proofs by Induction"
+    # Just the end of the lecture (one part) and the merge, not the whole lecture again.
+    assert len(fake_ai.prompts) == 2
+    assert "TRANSCRIPT PART 3:\nFinally we started induction" in fake_ai.prompts[0]
+    assert fake_ai.prompts[1].startswith("Below are notes written for consecutive parts")
+
+
+def test_live_part_notes_route_and_text_job_with_parts(client, fake_ai):
+    part = client.post("/api/live/part-notes", json={"text": "Base case and inductive step.", "index": 1}).json()
+    assert part["notes"]["title"] == "Proofs by Induction"
+    import json as _json
+    data = {"transcript": LECTURE, "place": "false", "parts": _json.dumps([part["notes"]]), "parts_chars": "200"}
+    job = wait_for_job(client, client.post("/api/jobs/text", data=data).json()["id"])
+    assert job["status"] == "done", job["error"]
+    assert any(p.startswith("Below are notes written for consecutive parts") for p in fake_ai.prompts)
+    bad = client.post("/api/jobs/text", data={"transcript": "x", "parts": "not json"})
+    assert bad.status_code == 400

@@ -1,3 +1,4 @@
+import json
 import logging
 import secrets
 import shutil
@@ -57,6 +58,7 @@ def get_config():
         "notion_configured": notion.is_configured(),
         "transcribe_backend": config.TRANSCRIBE_BACKEND,
         "max_upload_mb": config.MAX_UPLOAD_MB,
+        "summary_chunk_chars": config.SUMMARY_CHUNK_CHARS,
     }
 
 
@@ -139,17 +141,37 @@ async def from_url(url: str = Form(..., min_length=8, max_length=2000, pattern=r
 async def from_text(transcript: str = Form(..., min_length=1, max_length=400_000),
                     label: str = Form("Recording", max_length=200), slides_file: UploadFile | None = File(None),
                     extras: str = Form(""), place: bool = Form(True), usual_person_id: str = Form(""),
-                    source: Literal["recording", "document"] = Form("recording")):
+                    source: Literal["recording", "document"] = Form("recording"),
+                    parts: str = Form("", max_length=500_000), parts_chars: int = Form(0, ge=0)):
     """Text the page already has: a recording it transcribed while it was being made, or a scanned
-    document it read itself. Only the notes are left to write."""
+    document it read itself. Only the notes are left to write. `parts` (JSON) are notes the page had
+    written during the recording for the first `parts_chars` characters of the transcript."""
+    try:
+        done = json.loads(parts) if parts else []
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Bad notes from the recording.")
+    if not isinstance(done, list) or len(done) > 100 or not all(isinstance(p, dict) for p in done):
+        raise HTTPException(status_code=400, detail="Bad notes from the recording.")
     workdir = jobs.new_workdir()
     try:
         slides_path = await _save_slides(slides_file, workdir)
     except HTTPException:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
-    return jobs.submit_text(transcript, workdir, label,
-                            _options(slides_path, extras, place, usual_person_id, source)).public()
+    options = _options(slides_path, extras, place, usual_person_id, source)
+    options.parts, options.parts_chars = done or None, parts_chars if done else 0
+    return jobs.submit_text(transcript, workdir, label, options).public()
+
+
+class PartBody(BaseModel):
+    text: str = Field(min_length=1, max_length=40_000)
+    index: int = Field(ge=1, le=100)
+
+
+@api.post("/live/part-notes")
+def live_part_notes(body: PartBody):
+    """Notes for one finished part of a lecture that's still being recorded."""
+    return {"notes": summarize.part_notes(body.text, body.index)}
 
 
 @api.get("/jobs/{job_id}")

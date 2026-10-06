@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
-SCRIPTS = ("store.js", "ocr.js", "app.js", "live.js", "chat.js")  # in the order the page loads them
+SCRIPTS = ("store.js", "ocr.js", "shrink.js", "app.js", "live.js", "chat.js")  # in the order the page loads them
 
 
 def test_every_element_the_scripts_use_exists():

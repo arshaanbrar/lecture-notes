@@ -427,6 +427,17 @@ $("#rec-process").addEventListener("click", async () => {
   processUpload(state.blob, `recording.${ext}`, true);
 });
 
+// A video: upload only its sound (shrink.js). Much smaller, so much quicker to upload.
+async function shrinkVideo(file, filename) {
+  if (!SHRINKABLE.test(filename) || file.size < SHRINK_MIN_BYTES) return { blob: file, filename };
+  startWorking("Taking the sound out of the video…");
+  try {
+    const audio = await audioOnly(file, (msg) => { $("#status-text").textContent = msg; });
+    if (audio) return { blob: audio, filename: audio.name };
+  } catch { /* upload the whole video instead */ }
+  return { blob: file, filename };
+}
+
 // A scanned PDF or a photo: read it on this device (ocr.js), which is much faster than the free
 // server, then send just the text. Returns false to upload the file instead (a normal PDF, or if
 // reading it here didn't work; the server can read scans too, only slower).
@@ -464,9 +475,15 @@ async function processLiveTranscript() {
   const transcript = await liveTranscriptFor(startedAt);
   if (!transcript) return false;
   const placement = livePlacementFor(startedAt);
+  const { parts, partsEnd } = await livePartsFor(startedAt);
   try {
     const form = new FormData();
     form.append("transcript", transcript);
+    if (parts.length) {
+      // Notes for most of the lecture were written while it was recorded.
+      form.append("parts", JSON.stringify(parts));
+      form.append("parts_chars", String(partsEnd));
+    }
     form.append("label", "Recording");
     form.append("extras", chosenExtras().join(","));
     form.append("usual_person_id", recall(WHO_KEY));
@@ -637,6 +654,7 @@ async function processUpload(blob, filename, fromRecording) {
   state.fromRecording = fromRecording;
   state.earlyPlacement = null;
   if (!fromRecording && await processScanOnDevice(blob, filename)) return;
+  if (!fromRecording) ({ blob, filename } = await shrinkVideo(blob, filename));
   startWorking(isDocument(filename) ? "Uploading document…" : "Uploading…");
   $("#upload-progress").hidden = false;
   $("#upload-fill").style.width = "0";
