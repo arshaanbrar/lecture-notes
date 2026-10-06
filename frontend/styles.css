@@ -219,3 +219,26 @@ body.locked #app { display: none; }
   .site-header { padding-top: 24px; }
   .card { padding: 16px; }
 }
+
+/* Notion page browser */
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 12px 0 6px; color: var(--muted); font-size: 0.9rem; }
+.crumb { font: inherit; background: none; border: 0; padding: 2px 4px; border-radius: 6px; color: var(--accent); cursor: pointer; }
+.crumb:last-child { color: var(--text); font-weight: 600; }
+.crumb:hover { background: var(--accent-soft); }
+.page-list {
+  list-style: none; margin: 0; padding: 4px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+  max-height: 300px; overflow-y: auto;
+}
+.page-row {
+  font: inherit; color: var(--text); background: none; border: 0; border-radius: 8px;
+  width: 100%; padding: 8px 10px; cursor: pointer; text-align: left;
+  display: grid; grid-template-columns: 1fr auto; column-gap: 8px;
+}
+.page-row:hover { background: var(--accent-soft); }
+.page-name { overflow-wrap: anywhere; }
+.page-path { grid-column: 1; color: var(--muted); font-size: 0.8rem; overflow-wrap: anywhere; }
+.page-arrow { grid-column: 2; grid-row: 1; color: var(--muted); font-size: 1.2rem; line-height: 1; align-self: center; }
+.page-empty { padding: 10px; }
+.target { margin: 10px 0 0; font-size: 0.95rem; }
+.linkish { font: inherit; background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; }

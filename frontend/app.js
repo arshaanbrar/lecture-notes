@@ -409,7 +409,7 @@ function showResults(job) {
   $("#results").hidden = false;
   $("#notion-card").hidden = false;
   $("#notion-result").textContent = "";
-  if (state.config?.notion_configured && notionMode() === "existing" && !$("#page-select").options.length) loadPages();
+  if (state.config?.notion_configured && notionMode() === "existing" && !tree.loaded) loadTree();
   $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -446,38 +446,149 @@ function notionMode() {
   return $('input[name="notion-mode"]:checked').value;
 }
 
-let searchTimer = null;
-async function loadPages(query = "") {
-  const select = $("#page-select");
-  select.replaceChildren(new Option("Loading…", ""));
+// Folder-style page browser: `path` is the list of page IDs from the top level down to
+// the page that's open. The open page is where notes get added.
+const tree = { loaded: false, nodes: new Map(), children: new Map(), path: [] };
+
+function nodeLabel(node) {
+  return `${node.icon || (node.type === "database" ? "🗂️" : "📄")} ${node.title}`;
+}
+
+function pathTo(id) {
+  const path = [];
+  for (let cur = id; cur && tree.nodes.has(cur) && path.length < 50; cur = tree.nodes.get(cur).parent) path.unshift(cur);
+  return path;
+}
+
+function openNode(id) {
+  tree.path = id ? pathTo(id) : [];
+  $("#page-search").value = "";
+  renderTree();
+}
+
+function selectedPageId() {
+  const id = tree.path[tree.path.length - 1];
+  return id && tree.nodes.get(id).type === "page" ? id : "";
+}
+
+function pageRow(node, subtitle) {
+  const li = document.createElement("li");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "page-row";
+  const name = document.createElement("span");
+  name.className = "page-name";
+  name.textContent = nodeLabel(node);
+  btn.append(name);
+  if (subtitle) {
+    const sub = document.createElement("span");
+    sub.className = "page-path";
+    sub.textContent = subtitle;
+    btn.append(sub);
+  }
+  if (tree.children.has(node.id)) {
+    const arrow = document.createElement("span");
+    arrow.className = "page-arrow";
+    arrow.textContent = "›";
+    btn.append(arrow);
+  }
+  btn.addEventListener("click", () => openNode(node.id));
+  li.append(btn);
+  return li;
+}
+
+function renderTree() {
+  const list = $("#page-list");
+  const crumbs = $("#page-crumbs");
+  const query = $("#page-search").value.trim().toLowerCase();
+  list.replaceChildren();
+  crumbs.replaceChildren();
+
+  if (!tree.loaded) {
+    list.innerHTML = '<li class="muted page-empty">Loading pages…</li>';
+    return;
+  }
+
+  if (query) {
+    // Search: flat list of matches anywhere, with their location shown underneath.
+    const matches = [...tree.nodes.values()].filter((n) => n.title.toLowerCase().includes(query)).slice(0, 60);
+    matches.forEach((n) => {
+      const where = pathTo(n.parent).map((id) => tree.nodes.get(id).title).join(" › ") || "Top level";
+      list.append(pageRow(n, where));
+    });
+    if (!matches.length) list.innerHTML = '<li class="muted page-empty">No pages match.</li>';
+  } else {
+    // Breadcrumbs: All pages › University › Math
+    const crumb = (label, id) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "crumb";
+      b.textContent = label;
+      b.addEventListener("click", () => openNode(id));
+      return b;
+    };
+    crumbs.append(crumb("All pages", null));
+    tree.path.forEach((id) => crumbs.append(" › ", crumb(tree.nodes.get(id).title, id)));
+
+    const current = tree.path[tree.path.length - 1] ?? null;
+    const kids = tree.children.get(current) || [];
+    kids.forEach((id) => list.append(pageRow(tree.nodes.get(id))));
+    if (!kids.length) {
+      list.innerHTML = current
+        ? '<li class="muted page-empty">No pages inside this one.</li>'
+        : '<li class="muted page-empty">No pages found. Share pages with your integration in Notion.</li>';
+    }
+  }
+
+  const target = $("#page-target");
+  const id = tree.path[tree.path.length - 1];
+  if (!id) target.textContent = "Open the page you want to add notes to.";
+  else if (tree.nodes.get(id).type === "database") target.textContent = "This is a database. Open a page inside it.";
+  else {
+    const b = document.createElement("strong");
+    b.textContent = tree.path.map((p) => tree.nodes.get(p).title).join(" › ");
+    target.replaceChildren("Notes will be added to: ", b);
+  }
+  $("#notion-send").disabled = notionMode() === "existing" && !selectedPageId();
+}
+
+async function loadTree(refresh = false) {
+  tree.loaded = false;
+  renderTree();
   try {
-    const { pages } = await api(`/api/notion/pages?q=${encodeURIComponent(query)}`);
-    select.replaceChildren();
-    if (!pages.length) select.append(new Option("No pages found. Share pages with your integration in Notion.", ""));
-    pages.forEach((p) => select.append(new Option(`${p.icon ? p.icon + " " : ""}${p.title}`, p.id)));
+    const { nodes } = await api(`/api/notion/tree${refresh ? "?refresh=true" : ""}`);
+    const byTitle = (a, b) => tree.nodes.get(a).title.localeCompare(tree.nodes.get(b).title, undefined, { numeric: true });
+    tree.nodes = new Map(nodes.map((n) => [n.id, n]));
+    tree.children = new Map();
+    nodes.forEach((n) => {
+      if (!tree.children.has(n.parent)) tree.children.set(n.parent, []);
+      tree.children.get(n.parent).push(n.id);
+    });
+    tree.children.forEach((ids) => ids.sort(byTitle));
+    tree.path = tree.path.filter((id) => tree.nodes.has(id));
+    tree.loaded = true;
   } catch (err) {
-    select.replaceChildren(new Option("Couldn't load pages", ""));
     showError(err.message);
   }
+  renderTree();
 }
 
 $$('input[name="notion-mode"]').forEach((r) => r.addEventListener("change", () => {
   const existing = notionMode() === "existing";
   $("#existing-picker").hidden = !existing;
-  if (existing && !$("#page-select").options.length) loadPages();
+  $("#notion-send").disabled = existing && !selectedPageId();
+  if (existing && !tree.loaded) loadTree();
 }));
 
-$("#page-search").addEventListener("input", (e) => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => loadPages(e.target.value), 350);
-});
+$("#page-search").addEventListener("input", renderTree);
+$("#page-refresh").addEventListener("click", () => loadTree(true));
 
 $("#notion-send").addEventListener("click", async () => {
   if (!state.result) return;
   clearError();
   const mode = notionMode();
-  const pageId = $("#page-select").value;
-  if (mode === "existing" && !pageId) { showError("Pick a Notion page first."); return; }
+  const pageId = selectedPageId();
+  if (mode === "existing" && !pageId) { showError("Open the Notion page you want to add notes to."); return; }
 
   const btn = $("#notion-send");
   btn.disabled = true;

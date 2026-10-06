@@ -61,32 +61,83 @@ def _request(method: str, path: str, body: dict | None = None) -> dict:
     raise AppError("Notion is busy right now. Try again in a minute.")
 
 
-def _page_title(page: dict) -> str:
-    for prop in page.get("properties", {}).values():
-        if prop.get("type") == "title":
-            return "".join(t.get("plain_text", "") for t in prop.get("title", [])) or "Untitled"
-    return "Untitled"
+def _title(obj: dict) -> str:
+    if obj.get("object") == "database":
+        parts = obj.get("title", [])
+    else:
+        parts = next((p.get("title", []) for p in obj.get("properties", {}).values() if p.get("type") == "title"), [])
+    return "".join(t.get("plain_text", "") for t in parts).strip() or "Untitled"
 
 
-def list_pages(query: str = "") -> list[dict]:
-    body = {
-        "filter": {"property": "object", "value": "page"},
-        "sort": {"direction": "descending", "timestamp": "last_edited_time"},
-        "page_size": 50,
-    }
-    if query.strip():
-        body["query"] = query.strip()
-    results = _request("POST", "/search", body).get("results", [])
-    pages = []
-    for page in results:
-        icon = page.get("icon") or {}
-        pages.append({
-            "id": page["id"],
-            "title": _page_title(page),
-            "url": page.get("url", ""),
+# ---------- page tree (for the folder-style picker) ----------
+
+TREE_TTL_SECONDS = 60
+MAX_SEARCH_REQUESTS = 30  # 100 results each → up to 3000 pages/databases
+
+_tree_cache: dict = {"at": 0.0, "nodes": None}
+_block_parents: dict[str, str | None] = {}
+
+
+def _raw_parent(obj: dict) -> tuple[str, str | None]:
+    parent = obj.get("parent") or {}
+    kind = parent.get("type", "workspace")
+    return kind, parent.get(kind) if kind != "workspace" else None
+
+
+def _resolve_block_parent(block_id: str) -> str | None:
+    """Pages inside columns/toggles have a block as parent; walk up to the page that holds it."""
+    if block_id in _block_parents:
+        return _block_parents[block_id]
+    result, current = None, block_id
+    for _ in range(6):
+        try:
+            kind, pid = _raw_parent(_request("GET", f"/blocks/{current}"))
+        except AppError:
+            break
+        if kind != "block_id":
+            result = pid
+            break
+        current = pid
+    _block_parents[block_id] = result
+    return result
+
+
+def page_tree(refresh: bool = False) -> list[dict]:
+    """Every page/database shared with the integration, each with its parent's ID (None = top level)."""
+    if not refresh and _tree_cache["nodes"] is not None and time.time() - _tree_cache["at"] < TREE_TTL_SECONDS:
+        return _tree_cache["nodes"]
+
+    results, cursor = [], None
+    for _ in range(MAX_SEARCH_REQUESTS):
+        body = {"page_size": 100, **({"start_cursor": cursor} if cursor else {})}
+        data = _request("POST", "/search", body)
+        results += data.get("results", [])
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+
+    nodes = {}
+    for obj in results:
+        if obj.get("object") not in ("page", "database") or obj.get("archived") or obj.get("in_trash"):
+            continue
+        kind, parent = _raw_parent(obj)
+        if kind == "block_id":
+            parent = _resolve_block_parent(parent)
+        icon = obj.get("icon") or {}
+        nodes[obj["id"]] = {
+            "id": obj["id"],
+            "type": obj["object"],
+            "title": _title(obj),
             "icon": icon.get("emoji", "") if icon.get("type") == "emoji" else "",
-        })
-    return pages
+            "parent": parent,
+        }
+    # A page whose parent the integration can't see is shown at the top level.
+    for node in nodes.values():
+        if node["parent"] not in nodes:
+            node["parent"] = None
+
+    _tree_cache.update(at=time.time(), nodes=list(nodes.values()))
+    return _tree_cache["nodes"]
 
 
 # ---------- block building ----------

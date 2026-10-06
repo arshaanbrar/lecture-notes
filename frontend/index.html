@@ -135,9 +135,14 @@
             <label><input type="radio" name="notion-mode" value="existing"> Add to an existing page</label>
           </div>
           <div id="existing-picker" hidden>
-            <input id="page-search" type="search" placeholder="Search your Notion pages…">
-            <select id="page-select" size="6" aria-label="Notion pages"></select>
-            <p class="muted small">Only pages shared with the integration show up here.</p>
+            <input id="page-search" type="search" placeholder="Search all pages…">
+            <nav id="page-crumbs" class="crumbs" aria-label="Current location"></nav>
+            <ul id="page-list" class="page-list"></ul>
+            <p id="page-target" class="target"></p>
+            <p class="muted small">
+              Only pages shared with the integration show up here.
+              <button type="button" class="linkish" id="page-refresh">Refresh list</button>
+            </p>
           </div>
           <button id="notion-send" class="btn primary">Send to Notion</button>
           <p id="notion-result"></p>

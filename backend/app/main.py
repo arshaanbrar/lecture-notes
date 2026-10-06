@@ -97,9 +97,9 @@ def job_status(job_id: str):
 
 # ---------- notion ----------
 
-@api.get("/notion/pages")
-def notion_pages(q: str = ""):
-    return {"pages": notion.list_pages(q)}
+@api.get("/notion/tree")
+def notion_tree(refresh: bool = False):
+    return {"nodes": notion.page_tree(refresh)}
 
 
 class Notes(BaseModel):
