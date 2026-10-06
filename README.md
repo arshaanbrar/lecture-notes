@@ -68,7 +68,7 @@ lecture-notes/
 │   ├── notion.py      # list pages, create page, append to page
 │   ├── placement.py   # whose lecture, which class, where in Notion
 │   └── utils.py
-├── frontend/          # index.html, styles.css, app.js, live.js (transcribe + guess while recording), chat.js (no build step)
+├── frontend/          # index.html, styles.css, app.js, live.js (transcribe + guess while recording), ocr.js (read scans on the device), chat.js (no build step)
 ├── Dockerfile         # installs ffmpeg
 ├── render.yaml        # one-click Render Blueprint
 ├── requirements.txt
@@ -226,7 +226,7 @@ Under the recording, and on the Upload tab, there's **📎 Add lecture slides**.
 ### Upload / link
 
 - **Files:** any audio or video format ffmpeg reads (mp3, m4a, wav, mp4, mov, webm, mkv, …), up to `MAX_UPLOAD_MB` (default 300 MB).
-- **Documents:** drop a PDF, Word (`.docx`), PowerPoint (`.pptx`) or text file into the same box and the app summarises it like a lecture, with the same notes, study extras and Send to Notion. It skips transcription, and the document's text goes in a collapsed **Full text** section. Scanned PDFs and photos of notes or handouts (`.jpg`, `.png`) work too: pages without selectable text are read with OCR. That's **Tesseract**, free and open source, installed in the Docker image, so no key is needed. OCR takes several seconds a page on Render's free server, so the first 40 scanned pages are read, with a warning if there are more. Documents over ~100 pages are cut off with a warning. Scanned slides work the same way, up to 20 pages.
+- **Documents:** drop a PDF, Word (`.docx`), PowerPoint (`.pptx`) or text file into the same box and the app summarises it like a lecture, with the same notes, study extras and Send to Notion. It skips transcription, and the document's text goes in a collapsed **Full text** section. Scanned PDFs and photos of notes or handouts (`.jpg`, `.png`) work too: pages without selectable text are read with OCR (**Tesseract**, free and open source, so no key is needed). The OCR runs **on your own device** in the browser (Tesseract.js plus pdf.js, about 4 MB the first time, then cached), because a laptop or phone is many times faster than Render's free server. A 9-page scan takes about 10 seconds on a laptop. Only the text is sent to the server. If that doesn't work in your browser, the file is uploaded and the server reads it instead, which is slower: the first 40 scanned pages, with a warning if there are more. Documents over ~100 pages are cut off with a warning. Scanned slides work the same way, up to 20 pages.
 - **Links:** YouTube, Vimeo, Loom, Google Drive files shared publicly, direct `.mp3`/`.mp4` links, and [many other sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). The link must be public. YouTube sometimes blocks downloads from cloud servers. If a YouTube link fails on Render, download the video yourself and upload the file instead.
 
 ---

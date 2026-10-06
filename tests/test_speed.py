@@ -98,3 +98,11 @@ def test_gpt_oss_thinks_less_and_quick_questions_use_the_fast_model(monkeypatch)
     assert sent[-1]["model"] == "openai/gpt-oss-120b"
     groq.chat_json("s", "u", lambda _: None, fast=True)  # remembered: no retry of the unavailable one
     assert sent[-1]["model"] == "openai/gpt-oss-20b" and len(sent) == 4
+
+
+def test_a_scan_read_on_the_device_is_summarised_as_a_document(client, fake_ai):
+    job = client.post("/api/jobs/text", data={"transcript": "Soldiers and the state. " * 30, "label": "Messing.pdf",
+                                              "source": "document", "place": "false"}).json()
+    job = wait_for_job(client, job["id"])
+    assert job["status"] == "done" and job["source"] == "document" and job["notes"]["source"] == "document"
+    assert any(p.startswith("Note: the input below is the text of a document") for p in fake_ai.prompts)

@@ -427,6 +427,33 @@ $("#rec-process").addEventListener("click", async () => {
   processUpload(state.blob, `recording.${ext}`, true);
 });
 
+// A scanned PDF or a photo: read it on this device (ocr.js), which is much faster than the free
+// server, then send just the text. Returns false to upload the file instead (a normal PDF, or if
+// reading it here didn't work; the server can read scans too, only slower).
+async function processScanOnDevice(file, filename) {
+  if (!scansOnDevice.test(filename)) return false;
+  startWorking("Checking the document…");
+  let text = null;
+  try {
+    text = await readScanOnDevice(file, (msg) => { $("#status-text").textContent = msg; });
+  } catch { /* fall back to reading it on the server */ }
+  if (!text) return false;
+  try {
+    const form = new FormData();
+    form.append("transcript", text);
+    form.append("label", filename);
+    form.append("source", "document");
+    form.append("extras", chosenExtras().join(","));
+    form.append("usual_person_id", recall(WHO_KEY));
+    const job = await api("/api/jobs/text", { method: "POST", body: form });
+    await pollJob(job.id);
+  } catch (err) {
+    stopWorking();
+    showError(err.message);
+  }
+  return true;
+}
+
 // Most of the recording was transcribed while it was being made (live.js), so only the notes are
 // left to write. Returns false if that didn't work out; the recording is then uploaded as usual.
 async function processLiveTranscript() {
@@ -609,6 +636,7 @@ async function processUpload(blob, filename, fromRecording) {
   clearError();
   state.fromRecording = fromRecording;
   state.earlyPlacement = null;
+  if (!fromRecording && await processScanOnDevice(blob, filename)) return;
   startWorking(isDocument(filename) ? "Uploading document…" : "Uploading…");
   $("#upload-progress").hidden = false;
   $("#upload-fill").style.width = "0";
@@ -1204,7 +1232,7 @@ async function init() {
     return;
   }
   const cfg = state.config;
-  $("#file-limit").textContent = `Audio or video, up to ${cfg.max_upload_mb} MB`;
+  $("#file-limit").textContent = `Up to ${cfg.max_upload_mb} MB`;
   $("#notion-off").hidden = cfg.notion_configured;
   $("#notion-on").hidden = !cfg.notion_configured;
   if (cfg.password_required && !getPassword()) lock();

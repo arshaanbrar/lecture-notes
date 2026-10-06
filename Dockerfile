@@ -21,5 +21,7 @@ COPY backend ./backend
 COPY frontend ./frontend
 
 ENV PYTHONUNBUFFERED=1
+# OCR on a small server: one thread is fastest.
+ENV OMP_THREAD_LIMIT=1
 # Render provides $PORT. One worker: jobs are kept in memory.
 CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]

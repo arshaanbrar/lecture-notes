@@ -100,9 +100,10 @@ def _extras(value: str) -> list[str]:
     return [e for e in value.split(",") if e in summarize.EXTRAS]
 
 
-def _options(slides_path: Path | None, extras: str, place: bool, usual_person_id: str) -> jobs.Options:
+def _options(slides_path: Path | None, extras: str, place: bool, usual_person_id: str,
+             source: str = "recording") -> jobs.Options:
     return jobs.Options(slides_path=slides_path, extras=_extras(extras), place=place,
-                        usual_person_id=usual_person_id[:64])
+                        usual_person_id=usual_person_id[:64], source=source)
 
 
 @api.post("/jobs/upload")
@@ -137,15 +138,18 @@ async def from_url(url: str = Form(..., min_length=8, max_length=2000, pattern=r
 @api.post("/jobs/text")
 async def from_text(transcript: str = Form(..., min_length=1, max_length=400_000),
                     label: str = Form("Recording", max_length=200), slides_file: UploadFile | None = File(None),
-                    extras: str = Form(""), place: bool = Form(True), usual_person_id: str = Form("")):
-    """A recording the page already transcribed while it was being made: only the notes are left."""
+                    extras: str = Form(""), place: bool = Form(True), usual_person_id: str = Form(""),
+                    source: Literal["recording", "document"] = Form("recording")):
+    """Text the page already has: a recording it transcribed while it was being made, or a scanned
+    document it read itself. Only the notes are left to write."""
     workdir = jobs.new_workdir()
     try:
         slides_path = await _save_slides(slides_file, workdir)
     except HTTPException:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
-    return jobs.submit_text(transcript, workdir, label, _options(slides_path, extras, place, usual_person_id)).public()
+    return jobs.submit_text(transcript, workdir, label,
+                            _options(slides_path, extras, place, usual_person_id, source)).public()
 
 
 @api.get("/jobs/{job_id}")

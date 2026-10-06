@@ -75,6 +75,7 @@ class Options:
     extras: list[str] = field(default_factory=list)
     place: bool = True          # also work out where in Notion it goes, alongside the notes
     usual_person_id: str = ""   # who this device usually sends notes for (breaks ties)
+    source: str = "recording"   # for text sent by the page: "recording" (live transcript) or "document"
 
 
 def submit_file(path: Path, workdir: Path, label: str, options: Options) -> Job:
@@ -130,7 +131,7 @@ def _run(job: Job, workdir: Path, options: Options, path: Path | None, url: str 
 
     try:
         if text is not None:
-            pass  # transcribed live during the recording
+            job.source = options.source  # transcribed live, or a scan the page read itself
         elif path and documents.is_document(path):
             # A document (PDF, Word…): no audio to transcribe, its text is what gets summarised.
             job.source = "document"

@@ -6,6 +6,7 @@ Tesseract OCR (free and open source, runs on this server): pdftoppm turns each p
 and tesseract reads it.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -20,9 +21,11 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 SUFFIXES = {".pdf", ".docx", ".pptx", ".txt", ".md"} | IMAGE_SUFFIXES
 MAX_CHARS = 300_000  # ~100 pages; longer documents are cut off with a warning
 OCR_MAX_PAGES = 40   # OCR takes several seconds a page on a small free server
-OCR_DPI = 200
+OCR_DPI = 150       # same text as 200 dpi in tests, with less work
 OCR_TIMEOUT = 180    # seconds per page
 MIN_PAGE_CHARS = 25  # a page with less text than this is probably a scan
+# One thread: on a server with a fraction of a CPU, tesseract's threads only get in each other's way.
+OCR_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
 WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
@@ -37,7 +40,7 @@ def ocr_available() -> bool:
 def _ocr_image(image: Path) -> str:
     try:
         done = subprocess.run(["tesseract", str(image), "stdout"], capture_output=True, text=True,
-                              timeout=OCR_TIMEOUT)
+                              timeout=OCR_TIMEOUT, env=OCR_ENV)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return done.stdout if done.returncode == 0 else ""
