@@ -28,6 +28,19 @@ def test_upload_makes_notes_with_extras(client, stub_audio, fake_ai):
     assert job["notes"]["quiz"] and job["notes"]["flashcards"] and job["notes"]["key_terms"]
 
 
+def test_upload_a_document_makes_notes_without_transcribing(client, fake_ai, monkeypatch):
+    from backend.app import audio
+    monkeypatch.setattr(audio, "normalize", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no audio step")))
+    doc = ("Week 3 reading.txt", b"Induction: prove P(1), then P(k) implies P(k+1).")
+    job = wait_for_job(client, client.post("/api/jobs/upload", files={"file": doc},
+                                           data={"extras": "flashcards"}).json()["id"])
+    assert job["status"] == "done", job["error"]
+    assert job["source"] == "document" and job["transcript"].startswith("Induction: prove P(1)")
+    assert job["notes"]["source"] == "document" and job["notes"]["flashcards"]
+    # The AI is told it's reading a document, not a speech transcript.
+    assert any(p.startswith("Note: the input below is the text of a document") for p in fake_ai.prompts)
+
+
 def test_upload_rejects_empty_files_and_wrong_slides(client):
     assert client.post("/api/jobs/upload", files={"file": ("a.webm", b"")}).status_code == 400
     bad = client.post("/api/jobs/upload", files={"file": AUDIO, "slides_file": ("notes.docx", b"x")})

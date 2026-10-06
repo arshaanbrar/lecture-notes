@@ -490,8 +490,16 @@ function setFile(file) {
   }
   state.file = file;
   $("#file-name").textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
+  // A document is summarised as it is: no audio to transcribe, and slides wouldn't add anything.
+  const doc = isDocument(file.name);
+  $("#file-process").textContent = doc ? "Write notes from document" : "Transcribe & write notes";
+  $("#upload-slides-pick").hidden = doc;
+  if (doc) setSlides(null);
   setBusy(state.busy);
 }
+
+const DOCUMENT_TYPES = /\.(pdf|docx|pptx|txt|md)$/i;
+const isDocument = (name) => DOCUMENT_TYPES.test(name || "");
 
 $("#file-input").addEventListener("change", (e) => setFile(e.target.files[0]));
 const dz = $("#dropzone");
@@ -565,7 +573,7 @@ function uploadWithProgress(blob, filename) {
 async function processUpload(blob, filename, fromRecording) {
   clearError();
   state.fromRecording = fromRecording;
-  startWorking("Uploading…");
+  startWorking(isDocument(filename) ? "Uploading document…" : "Uploading…");
   $("#upload-progress").hidden = false;
   $("#upload-fill").style.width = "0";
   try {
@@ -606,7 +614,8 @@ async function pollJob(id) {
       }
       if (job.warning) showError(job.warning);
       if (job.status === "error") {
-        showError(job.transcript ? `Transcript is ready, but notes failed: ${job.error}` : job.error);
+        const what = job.source === "document" ? "The document was read" : "Transcript is ready";
+        showError(job.transcript ? `${what}, but notes failed: ${job.error}` : job.error);
       }
       return;
     }
@@ -748,6 +757,7 @@ function showResults(job) {
   fillCards(notes.flashcards || []);
   $("#notes-body").hidden = !job.notes;
   $("#note-transcript").textContent = job.transcript;
+  $("#transcript-label").textContent = notes.source === "document" ? "Full text" : "Full transcript";
   $("#word-count").textContent = `(${job.transcript.split(/\s+/).filter(Boolean).length.toLocaleString()} words)`;
   $("#results").hidden = false;
   $("#notion-card").hidden = false;
@@ -790,7 +800,7 @@ function toMarkdown() {
     lines.push("", "## Flashcards", "| Front | Back |", "| --- | --- |");
     notes.flashcards.forEach((x) => lines.push(`| ${x.front.replace(/\|/g, "/")} | ${x.back.replace(/\|/g, "/")} |`));
   }
-  lines.push("", "## Full transcript", transcript);
+  lines.push("", notes.source === "document" ? "## Full text" : "## Full transcript", transcript);
   return lines.join("\n");
 }
 

@@ -387,12 +387,13 @@ def _append(block_id: str, blocks: list[dict]) -> list[dict]:
 
 
 def _write_notes(page_id: str, notes: dict, transcript: str, heading: str | None = None) -> None:
-    """Write the notes, then the transcript inside a collapsed "Full transcript" toggle heading."""
+    """Write the notes, then the transcript (or a document's text) inside a collapsed toggle heading."""
     blocks = build_blocks(notes, heading)
     words = len(transcript.split())
     if words:
+        label = "Full text" if notes.get("source") == "document" else "Full transcript"
         blocks.append({"object": "block", "type": "divider", "divider": {}})
-        blocks.append(_block("heading_2", f"Full transcript ({words:,} words)", is_toggleable=True))
+        blocks.append(_block("heading_2", f"{label} ({words:,} words)", is_toggleable=True))
     created = _append(page_id, blocks)
     if words and created:
         toggle_id = created[-1]["id"]

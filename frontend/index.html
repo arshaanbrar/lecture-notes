@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lecture Notes</title>
-  <meta name="description" content="Record or upload a lecture or meeting and get a transcript, AI summary notes, and a Notion page.">
+  <meta name="description" content="Record or upload a lecture, meeting or document and get AI summary notes and a Notion page.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📝</text></svg>">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="site-header">
     <h1>📝 Lecture Notes</h1>
-    <p>Record or upload a lecture or meeting. Get a transcript, summary notes, and a Notion page.</p>
+    <p>Record or upload a lecture or meeting, or drop in a document. Get summary notes and a Notion page.</p>
   </header>
 
   <main>
@@ -117,13 +117,14 @@
         </div>
 
         <div class="tab-panel" id="tab-upload" hidden>
-          <p class="label">Upload an audio or video file</p>
+          <p class="label">Upload a recording or a document</p>
           <label class="dropzone" id="dropzone">
-            <input type="file" id="file-input" accept="audio/*,video/*,.m4a,.mp3,.mp4,.wav,.webm,.mov,.mkv,.ogg">
+            <input type="file" id="file-input" accept="audio/*,video/*,.m4a,.mp3,.mp4,.wav,.webm,.mov,.mkv,.ogg,.pdf,.docx,.pptx,.txt,.md">
             <span id="file-name">Drop a file here or <u>browse</u></span>
+            <small class="muted">Audio, video, or a document to summarise (PDF, Word, PowerPoint, text)</small>
             <small class="muted" id="file-limit"></small>
           </label>
-          <div class="slides-pick">
+          <div class="slides-pick" id="upload-slides-pick">
             <label class="slides-label">
               <input type="file" class="slides-input" accept=".pdf,.pptx,application/pdf">
               📎 Add lecture slides <span class="muted">(optional, helps make the notes more accurate)</span>
@@ -191,7 +192,7 @@
         </div>
 
         <details class="transcript">
-          <summary>Full transcript <span id="word-count" class="muted"></span></summary>
+          <summary><span id="transcript-label">Full transcript</span> <span id="word-count" class="muted"></span></summary>
           <div id="note-transcript"></div>
         </details>
 

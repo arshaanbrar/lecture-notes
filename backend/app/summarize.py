@@ -1,4 +1,4 @@
-"""Turn a transcript (and optionally the lecture slides) into notes with an LLM on Groq.
+"""Turn a transcript or a document's text (and optionally the lecture slides) into notes with an LLM on Groq.
 
 1. Notes: title, summary, key points, key terms, action items. Long transcripts are summarised in parts
    and then merged, so no single request goes over Groq's free-tier tokens-per-minute limit.
@@ -56,6 +56,11 @@ MERGE_SLIDES_CHARS = 5000
 EXTRAS_SLIDES_CHARS = 5000
 EXTRAS_TRANSCRIPT_CHARS = 9000
 
+DOCUMENT_NOTE = (
+    "Note: the input below is the text of a document (e.g. a reading, handout or lecture notes), "
+    "not a speech transcript. Treat \"transcript\" in these instructions as meaning that text.\n\n"
+)
+
 FULL_PROMPT = "Write notes for this transcript.\n\n{schema}\n\nTRANSCRIPT:\n{text}"
 PART_PROMPT = (
     "This is part {i} of {n} of a longer transcript. Write notes for this part only.\n\n"
@@ -79,31 +84,35 @@ def _with_slides(prompt: str, slides: str, limit: int) -> str:
 
 
 def make_notes(transcript: str, progress: Progress, slides: str = "", extras: list[str] | None = None,
-               warn: Progress = lambda _: None) -> dict:
-    notes = _base_notes(transcript, progress, slides)
+               warn: Progress = lambda _: None, source: str = "recording") -> dict:
+    """`source` is "recording" (a transcript) or "document" (text read from a PDF, Word file…)."""
+    note = DOCUMENT_NOTE if source == "document" else ""
+    notes = _base_notes(transcript, progress, slides, note)
     wanted = [e for e in (extras or []) if e in EXTRAS]
     if wanted:
         progress("Making study extras…")
         try:
-            notes.update(_make_extras(notes, transcript, slides, wanted, progress))
+            notes.update(_make_extras(notes, transcript, slides, wanted, progress, note))
         except AppError:  # the notes are fine without extras; don't fail the whole job
             warn("Couldn't make the study extras this time (the AI was busy). The notes are fine. "
                  "Try again later if you need the extras.")
+    if source == "document":
+        notes["source"] = "document"  # so the full text is labelled as such, here and in Notion
     return notes
 
 
-def _base_notes(transcript: str, progress: Progress, slides: str) -> dict:
+def _base_notes(transcript: str, progress: Progress, slides: str, note: str = "") -> dict:
     limit = config.SUMMARY_CHUNK_CHARS
     chunks = split_text(transcript, limit)
     if len(chunks) <= 1:
         progress("Writing notes…")
         prompt = FULL_PROMPT.format(schema=SCHEMA, text=transcript)
-        return _ask(_with_slides(prompt, slides, SINGLE_SLIDES_CHARS), progress)
+        return _ask(note + _with_slides(prompt, slides, SINGLE_SLIDES_CHARS), progress)
 
     partials = []
     for i, chunk in enumerate(chunks, 1):
         progress(f"Writing notes… part {i} of {len(chunks)}")
-        partials.append(_ask(PART_PROMPT.format(i=i, n=len(chunks), schema=SCHEMA, text=chunk), progress))
+        partials.append(_ask(note + PART_PROMPT.format(i=i, n=len(chunks), schema=SCHEMA, text=chunk), progress))
 
     progress("Combining notes…")
     # If the part notes are themselves too long for one request, merge them in groups first.
@@ -143,11 +152,12 @@ def _excerpts(transcript: str, limit: int) -> str:
     return "\n…\n".join([transcript[:third], transcript[mid:mid + third], transcript[-third:]])
 
 
-def _make_extras(notes: dict, transcript: str, slides: str, wanted: list[str], progress: Progress) -> dict:
+def _make_extras(notes: dict, transcript: str, slides: str, wanted: list[str], progress: Progress,
+                 note: str = "") -> dict:
     schema = "\n".join(f'"{key}": {EXTRAS[key][0]}' for key in wanted)
     prompt = EXTRAS_PROMPT.format(schema=schema, notes=json.dumps(notes, ensure_ascii=False),
                                   transcript=_excerpts(transcript, EXTRAS_TRANSCRIPT_CHARS))
-    data = _ask_json(_with_slides(prompt, slides, EXTRAS_SLIDES_CHARS), progress)
+    data = _ask_json(note + _with_slides(prompt, slides, EXTRAS_SLIDES_CHARS), progress)
     return _clean_extras(data, wanted)
 
 

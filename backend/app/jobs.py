@@ -1,4 +1,4 @@
-"""In-memory background jobs: download → convert → transcribe → summarise.
+"""In-memory background jobs: download → convert → transcribe → summarise (or read a document → summarise).
 
 One job runs at a time so a small free-tier server isn't overwhelmed; others wait in line.
 Jobs live in memory only — the browser keeps the results once they're done.
@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import audio, slides, summarize, transcribe
+from . import audio, documents, slides, summarize, transcribe
 from .utils import AppError
 
 log = logging.getLogger(__name__)
@@ -30,12 +30,13 @@ _lock = threading.Lock()
 class Job:
     id: str
     label: str
-    status: str = "queued"  # queued | downloading | converting | transcribing | summarizing | done | error
+    status: str = "queued"  # queued | downloading | converting | transcribing | reading | summarizing | done | error
     message: str = "Waiting in line…"
     transcript: str = ""
     notes: dict | None = None
     error: str = ""
     warning: str = ""  # something non-fatal the user should know (e.g. unreadable slides)
+    source: str = "recording"  # "recording" or "document" (a PDF, Word file… summarised directly)
     created: float = field(default_factory=time.time)
 
     def update(self, status: str | None = None, message: str | None = None) -> None:
@@ -54,6 +55,7 @@ class Job:
             "notes": self.notes,
             "error": self.error,
             "warning": self.warning,
+            "source": self.source,
         }
 
 
@@ -89,18 +91,28 @@ def _submit(label: str, workdir: Path, path: Path | None = None, url: str | None
 def _run(job: Job, workdir: Path, path: Path | None, url: str | None, slides_path: Path | None,
          extras: list[str]) -> None:
     progress = lambda msg: job.update(message=msg)  # noqa: E731
-    try:
-        if url:
-            job.update("downloading", "Downloading audio from the link…")
-            path, title = audio.download(url, workdir)
-            job.label = title
-        job.update("converting", "Preparing audio…")
-        clean = audio.normalize(path, workdir)
 
-        job.update("transcribing", "Transcribing…")
-        text = transcribe.transcribe(clean, workdir, progress)
-        if not text.strip():
-            raise AppError("No speech was detected in the audio.")
+    def warn(message: str) -> None:
+        job.warning = " ".join(filter(None, [job.warning, message]))
+
+    try:
+        if path and documents.is_document(path):
+            # A document (PDF, Word…): no audio to transcribe, its text is what gets summarised.
+            job.source = "document"
+            job.update("reading", "Reading the document…")
+            text = documents.full_text(path, warn)
+        else:
+            if url:
+                job.update("downloading", "Downloading audio from the link…")
+                path, title = audio.download(url, workdir)
+                job.label = title
+            job.update("converting", "Preparing audio…")
+            clean = audio.normalize(path, workdir)
+
+            job.update("transcribing", "Transcribing…")
+            text = transcribe.transcribe(clean, workdir, progress)
+            if not text.strip():
+                raise AppError("No speech was detected in the audio.")
         job.transcript = text
 
         slides_text = ""
@@ -112,10 +124,7 @@ def _run(job: Job, workdir: Path, path: Path | None, url: str | None, slides_pat
                 job.warning = str(e)
 
         job.update("summarizing", "Writing notes…")
-        def warn(message: str) -> None:
-            job.warning = " ".join(filter(None, [job.warning, message]))
-
-        job.notes = summarize.make_notes(text, progress, slides_text, extras, warn)
+        job.notes = summarize.make_notes(text, progress, slides_text, extras, warn, source=job.source)
         job.update("done", "Done")
     except AppError as e:
         job.error = str(e)

@@ -1,6 +1,6 @@
 # 📝 Lecture Notes
 
-Record or upload a lecture or meeting. The app gives you:
+Record or upload a lecture or meeting, or drop in a document. The app gives you:
 
 1. A full **transcript** (Whisper)
 2. **AI notes**: summary, key points, key terms and action items, plus optional study extras (see below) (Llama 3 on Groq, falling back to Groq's free `gpt-oss` models if your account can't use Llama)
@@ -211,6 +211,7 @@ Under the recording, and on the Upload tab, there's **📎 Add lecture slides**.
 ### Upload / link
 
 - **Files:** any audio or video format ffmpeg reads (mp3, m4a, wav, mp4, mov, webm, mkv, …), up to `MAX_UPLOAD_MB` (default 300 MB).
+- **Documents:** drop a PDF, Word (`.docx`), PowerPoint (`.pptx`) or text file into the same box and the app summarises it like a lecture, with the same notes, study extras and Send to Notion. It skips transcription, and the document's text goes in a collapsed **Full text** section. Scanned PDFs made of images have no text to read. Documents over ~100 pages are cut off with a warning.
 - **Links:** YouTube, Vimeo, Loom, Google Drive files shared publicly, direct `.mp3`/`.mp4` links, and [many other sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). The link must be public. YouTube sometimes blocks downloads from cloud servers. If a YouTube link fails on Render, download the video yourself and upload the file instead.
 
 ---

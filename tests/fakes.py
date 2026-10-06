@@ -132,7 +132,7 @@ class FakeAI:
             return json.dumps({"index": -1, "confident": False})
         if "file lecture notes" in system:
             return json.dumps({"choice": 0, "reason": "That's where the other lectures are."})
-        if prompt.startswith("Here are notes from a lecture"):
+        if "Here are notes from a lecture" in prompt:
             if self.fail_extras:
                 raise AppError("busy")
             return json.dumps({

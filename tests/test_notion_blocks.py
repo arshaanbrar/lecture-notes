@@ -40,3 +40,10 @@ def test_long_transcript_goes_inside_a_collapsed_toggle(fake_notion):
     inside = [children for block_id, children in fake_notion.appended[1:]]
     assert all(block_id == "block" + str(len(page_blocks) - 1) for block_id, _ in fake_notion.appended[1:])
     assert all(len(c) <= 100 for c in inside) and sum(len(c) for c in inside) > 100
+
+
+def test_a_documents_text_is_labelled_full_text(fake_notion):
+    notion.create_page("T", {"summary": "s", "source": "document"}, "Text of the reading.",
+                       "aaaa031d4dec83b7afd701c73565cd05")
+    toggle = fake_notion.appended[0][1][-1]
+    assert toggle["heading_2"]["rich_text"][0]["text"]["content"] == "Full text (4 words)"

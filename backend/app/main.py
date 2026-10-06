@@ -224,6 +224,7 @@ class Notes(BaseModel):
     quiz: list[QuizQuestion] = []
     cheat_sheet: list[str] = []
     explanations: list[Explanation] = []
+    source: Literal["recording", "document"] = "recording"
 
 
 class Place(BaseModel):
