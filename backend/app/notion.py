@@ -144,8 +144,11 @@ def page_tree(refresh: bool = False) -> list[dict]:
 # Blocks that can hold sub-pages inside them on a page (columns, toggles, callouts…).
 CONTAINER_BLOCKS = {"column_list", "column", "toggle", "callout", "quote", "synced_block",
                     "heading_1", "heading_2", "heading_3", "bulleted_list_item", "numbered_list_item"}
-MAX_CONTAINER_DEPTH = 3
-MAX_BLOCK_REQUESTS = 40
+MAX_CONTAINER_DEPTH = 4
+MAX_BLOCK_REQUESTS = 60
+# Toggles that hold a template's internals (e.g. "⚠️ DO NOT DELETE. This stuff runs the template!").
+# Their contents stay searchable but aren't listed. Other toggles are listed as normal.
+TEMPLATE_INTERNALS = re.compile(r"(do not|don'?t) delete|runs the template|template (stuff|files|internals)", re.I)
 
 _children_cache: dict[str, tuple[float, list[dict]]] = {}
 
@@ -159,14 +162,13 @@ def _block_text(block: dict) -> str:
     return "".join(t.get("plain_text", "") for t in content.get("rich_text", [])).strip()
 
 
-def _is_collapsed(block: dict) -> bool:
-    kind = block.get("type", "")
-    return kind == "toggle" or (kind.startswith("heading_") and block.get(kind, {}).get("is_toggleable"))
+def _is_template_internals(block: dict) -> bool:
+    return bool(TEMPLATE_INTERNALS.search(_block_text(block)))
 
 
 def _page_children(page_id: str) -> list[dict]:
-    """Sub-pages and tables on a page, top to bottom. Items inside collapsed toggles are marked
-    hidden (usually template internals); an unnamed table takes the text around it as its name."""
+    """Sub-pages and tables on a page, top to bottom. Items inside a template's "do not delete"
+    section are marked hidden; an unnamed table takes the text around it as its name."""
     icons = _icon_lookup()
     found: list[dict] = []
     budget = [MAX_BLOCK_REQUESTS]
@@ -188,12 +190,12 @@ def _page_children(page_id: str) -> list[dict]:
                     if nearby and (not title or title.startswith("View of ")):
                         title = nearby
                     found.append({"id": block["id"], "type": "database", "icon": icons.get(block["id"], ""),
-                                  "title": title or "Untitled", "hidden": hidden})
+                                  "title": title or "Untitled table", "hidden": hidden})
                 elif kind in CONTAINER_BLOCKS and block.get("has_children") and depth < MAX_CONTAINER_DEPTH:
                     # Layout blocks (columns) have no text of their own, so they keep the nearby label.
                     layout = kind in ("column_list", "column", "synced_block")
                     walk(block["id"], depth + 1, nearby if layout else _block_text(block)[:60],
-                         hidden or _is_collapsed(block))
+                         hidden or _is_template_internals(block))
                 elif _block_text(block):
                     nearby = _block_text(block)[:60]
             if not data.get("has_more"):
@@ -284,6 +286,96 @@ def create_page(title: str, notes: dict, transcript: str, parent_id: str | None 
     })
     _append(page["id"], blocks[MAX_BLOCKS_PER_REQUEST:])
     _tree_cache["nodes"] = None  # so the new page shows up in the picker straight away
+    _children_cache.clear()
+    return page.get("url", "")
+
+
+# ---------- "Add as a lecture" (course/lecture templates) ----------
+#
+# Many student templates keep courses in one table (e.g. "Domains") and lectures in another
+# (e.g. "Topics") that links back to the course. When the picked page is a course like that,
+# notes can be created as a new lecture entry linked to it, so they show up in the template's
+# calendars and course views instead of as a loose sub-page.
+
+_lecture_cache: dict[str, tuple[float, dict | None]] = {}
+
+
+def _same_id(a: str | None, b: str | None) -> bool:
+    return bool(a and b) and normalize_id(a) == normalize_id(b)
+
+
+def lecture_target(course_id: str) -> dict | None:
+    """If `course_id` is an entry in a table that another table links to, describe that table."""
+    course_id = normalize_id(course_id)
+    cached = _lecture_cache.get(course_id)
+    if cached and time.time() - cached[0] < TREE_TTL_SECONDS * 10:
+        return cached[1]
+    result = None
+    try:
+        course = _request("GET", f"/pages/{course_id}")
+        kind, courses_db = _raw_parent(course)
+        if kind == "database_id":
+            schema = _request("GET", f"/databases/{courses_db}").get("properties", {})
+            linked = {p["relation"].get("database_id") for p in schema.values() if p.get("type") == "relation"}
+            linked = {d for d in linked if d and not _same_id(d, courses_db)}
+            for lectures_db in linked:
+                db = _request("GET", f"/databases/{lectures_db}")
+                props = db.get("properties", {})
+                link = next((name for name, p in props.items() if p.get("type") == "relation"
+                             and _same_id(p["relation"].get("database_id"), courses_db)), None)
+                title = next((name for name, p in props.items() if p.get("type") == "title"), None)
+                if not (link and title):
+                    continue
+                kind_prop, kind_value = None, None
+                for name, p in props.items():
+                    if p.get("type") == "select":
+                        match = next((o["name"] for o in p["select"].get("options", [])
+                                      if o["name"].strip().lower() == "lecture"), None)
+                        if match:
+                            kind_prop, kind_value = name, match
+                            break
+                if not kind_prop and not re.search(r"lecture|topic|note|class", _title(db), re.I):
+                    continue  # e.g. an assessments table that links to courses: not for lecture notes
+                dates = [name for name, p in props.items() if p.get("type") == "date"]
+                result = {
+                    "database_id": lectures_db,
+                    "database_title": _title(db),
+                    "course_title": _title(course),
+                    "title_prop": title,
+                    "link_prop": link,
+                    "kind_prop": kind_prop,
+                    "kind_value": kind_value,
+                    "date_prop": "date" if "date" in dates else (dates[0] if dates else None),
+                }
+                if kind_prop:  # prefer the table that actually has a "lecture" type
+                    break
+    except AppError:
+        result = None
+    _lecture_cache[course_id] = (time.time(), result)
+    return result
+
+
+def create_lecture(course_id: str, title: str, notes: dict, transcript: str, day: str | None) -> str:
+    target = lecture_target(course_id)
+    if not target:
+        raise AppError("That page isn't a course with a lectures table. Pick another option.")
+    props = {
+        target["title_prop"]: {"title": _rich_text(title)[:1]},
+        target["link_prop"]: {"relation": [{"id": normalize_id(course_id)}]},
+    }
+    if target["kind_prop"]:
+        props[target["kind_prop"]] = {"select": {"name": target["kind_value"]}}
+    if target["date_prop"]:
+        props[target["date_prop"]] = {"date": {"start": day or date.today().isoformat()}}
+    blocks = build_blocks(notes, transcript)
+    page = _request("POST", "/pages", {
+        "parent": {"database_id": target["database_id"]},
+        "icon": {"type": "emoji", "emoji": "📝"},
+        "properties": props,
+        "children": blocks[:MAX_BLOCKS_PER_REQUEST],
+    })
+    _append(page["id"], blocks[MAX_BLOCKS_PER_REQUEST:])
+    _tree_cache["nodes"] = None
     _children_cache.clear()
     return page.get("url", "")
 

@@ -502,7 +502,42 @@ function openNode(id) {
   renderTree();
 }
 
+// Courses in course/lecture templates can take notes as a new linked lecture entry.
+const lectureTargets = new Map(); // page id -> {available, database_title, course_title} | "loading"
+let lectureAutoPickedFor = null;
+
+function lectureInfo(id) {
+  const info = id && lectureTargets.get(id);
+  return info && info !== "loading" && info.available ? info : null;
+}
+
+function updateLectureOption() {
+  const id = selectedPageId();
+  const node = id && tree.nodes.get(id);
+  const inTable = node && tree.nodes.get(node.parent)?.type === "database";
+  if (inTable && !lectureTargets.has(id)) {
+    lectureTargets.set(id, "loading");
+    api(`/api/notion/lecture-target/${id}`)
+      .then((info) => lectureTargets.set(id, info))
+      .catch(() => lectureTargets.set(id, { available: false }))
+      .finally(() => { if (selectedPageId() === id) renderTree(); });
+  }
+  const info = lectureInfo(id);
+  const option = $("#lecture-option");
+  option.hidden = !info;
+  if (info) {
+    $("#lecture-label").textContent = `Add as a lecture in ${info.database_title}`;
+    if (lectureAutoPickedFor !== id) {
+      lectureAutoPickedFor = id; // pick it once per course; the user can switch back
+      $('input[name="notion-mode"][value="lecture"]').checked = true;
+    }
+  } else if (notionMode() === "lecture") {
+    $('input[name="notion-mode"][value="new"]').checked = true;
+  }
+}
+
 function canSend() {
+  if (notionMode() === "lecture") return !!lectureInfo(selectedPageId());
   if (selectedPageId()) return true;
   return notionMode() === "new" && !tree.path.length && !!state.config?.notion_default_parent;
 }
@@ -586,10 +621,16 @@ function renderTree() {
     }
   }
 
+  updateLectureOption();
   const target = $("#page-target");
   const creating = notionMode() === "new";
   const id = tree.path[tree.path.length - 1];
-  if (!id) {
+  const lecture = notionMode() === "lecture" && lectureInfo(id);
+  if (lecture) {
+    const course = document.createElement("strong");
+    course.textContent = lecture.course_title;
+    target.replaceChildren(`New lecture will be added to ${lecture.database_title}, linked to `, course, ".");
+  } else if (!id) {
     target.textContent = creating
       ? (state.config?.notion_default_parent
         ? "The new page will go in your default notes page, or open a page to create it there."
@@ -657,6 +698,7 @@ $("#notion-send").addEventListener("click", async () => {
         title: $("#note-title").value.trim() || "Untitled notes",
         notes: { summary: notes.summary, key_points: notes.key_points, action_items: notes.action_items },
         transcript,
+        local_date: new Date().toLocaleDateString("en-CA"), // YYYY-MM-DD in the user's timezone
       }),
     });
     const a = document.createElement("a");
@@ -665,7 +707,7 @@ $("#notion-send").addEventListener("click", async () => {
     a.rel = "noopener";
     a.textContent = "Open in Notion ↗";
     $("#notion-result").replaceChildren("✅ Saved to Notion. ", a);
-    if (mode === "new") loadTree(true); // show the page we just created
+    if (mode !== "existing") loadTree(true); // show the page we just created
   } catch (err) {
     showError(err.message);
   } finally {

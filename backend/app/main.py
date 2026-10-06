@@ -126,18 +126,29 @@ class Notes(BaseModel):
     action_items: list[str] = []
 
 
+@api.get("/notion/lecture-target/{page_id}")
+def notion_lecture_target(page_id: str):
+    target = notion.lecture_target(page_id) if notion.normalize_id(page_id) else None
+    if not target:
+        return {"available": False}
+    return {"available": True, "database_title": target["database_title"], "course_title": target["course_title"]}
+
+
 class ExportBody(BaseModel):
-    mode: Literal["new", "existing"]
+    mode: Literal["new", "existing", "lecture"]
     page_id: str | None = None
     title: str = Field(min_length=1, max_length=200)
     notes: Notes
     transcript: str = ""
+    local_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
 @api.post("/notion/export")
 def notion_export(body: ExportBody):
     notes = body.notes.model_dump()
-    if body.mode == "new":
+    if body.mode == "lecture":
+        url = notion.create_lecture(body.page_id or "", body.title, notes, body.transcript, body.local_date)
+    elif body.mode == "new":
         url = notion.create_page(body.title, notes, body.transcript, body.page_id)
     else:
         url = notion.append_to_page(body.page_id or "", body.title, notes, body.transcript)
