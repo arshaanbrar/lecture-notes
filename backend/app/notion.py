@@ -317,6 +317,24 @@ def build_blocks(notes: dict, heading: str | None = None) -> list[dict]:
     blocks.append(_block("heading_2", "Action items"))
     actions = notes.get("action_items") or []
     blocks += [_block("to_do", a, checked=False) for a in actions] or [_block("paragraph", "None mentioned.")]
+
+    questions = notes.get("practice_questions") or []
+    if questions:
+        blocks.append(_block("heading_2", "Practice questions"))
+        blocks.append(_block("paragraph", "Click a question to reveal the answer."))
+        for item in questions:
+            toggle = _block("toggle", item["q"])
+            toggle["toggle"]["children"] = [_block("paragraph", item["a"])]
+            blocks.append(toggle)
+
+    terms = notes.get("key_terms") or []
+    if terms:
+        blocks.append(_block("heading_2", "Key terms"))
+        for item in terms:
+            text = [{"type": "text", "text": {"content": item["term"][:2000]}, "annotations": {"bold": True}}]
+            text.append({"type": "text", "text": {"content": " — "}})
+            text += _rich_text(item["definition"])[:98]
+            blocks.append({"object": "block", "type": "bulleted_list_item", "bulleted_list_item": {"rich_text": text}})
     return blocks
 
 

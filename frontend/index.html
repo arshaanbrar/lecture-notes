@@ -75,6 +75,14 @@
 
           <div id="recording-ready" class="ready" hidden>
             <audio id="rec-preview" controls></audio>
+            <div class="slides-pick">
+              <label class="slides-label">
+                <input type="file" class="slides-input" accept=".pdf,.pptx,application/pdf">
+                📎 Add lecture slides <span class="muted">(optional, helps make the notes more accurate)</span>
+              </label>
+              <span class="slides-chosen" hidden>📎 <span class="slides-name"></span>
+                <button type="button" class="linkish slides-remove">remove</button></span>
+            </div>
             <div class="row">
               <button id="rec-process" class="btn primary">Transcribe &amp; write notes</button>
               <a id="rec-download" class="btn" download>⬇ Save recording</a>
@@ -90,6 +98,14 @@
             <span id="file-name">Drop a file here or <u>browse</u></span>
             <small class="muted" id="file-limit"></small>
           </label>
+          <div class="slides-pick">
+            <label class="slides-label">
+              <input type="file" class="slides-input" accept=".pdf,.pptx,application/pdf">
+              📎 Add lecture slides <span class="muted">(optional, helps make the notes more accurate)</span>
+            </label>
+            <span class="slides-chosen" hidden>📎 <span class="slides-name"></span>
+              <button type="button" class="linkish slides-remove">remove</button></span>
+          </div>
           <button id="file-process" class="btn primary" disabled>Transcribe &amp; write notes</button>
 
           <div class="or"><span>or paste a link</span></div>
@@ -123,6 +139,14 @@
           <ul id="note-points"></ul>
           <h3>Action items</h3>
           <ul id="note-actions" class="checklist"></ul>
+          <div id="questions-block" hidden>
+            <h3>Practice questions</h3>
+            <ol id="note-questions" class="questions"></ol>
+          </div>
+          <div id="terms-block" hidden>
+            <h3>Key terms</h3>
+            <dl id="note-terms" class="terms"></dl>
+          </div>
         </div>
 
         <details class="transcript">

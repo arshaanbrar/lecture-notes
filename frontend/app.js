@@ -350,6 +350,32 @@ window.addEventListener("beforeunload", (e) => {
   if (state.rec || state.busy) { e.preventDefault(); e.returnValue = ""; }
 });
 
+// ---------- optional lecture slides ----------
+
+const SLIDES_MAX_MB = 50;
+
+function setSlides(file) {
+  if (file) {
+    if (!/\.(pdf|pptx)$/i.test(file.name)) {
+      showError("Slides must be a PDF or PowerPoint (.pptx) file.");
+      file = null;
+    } else if (file.size > SLIDES_MAX_MB * 1024 * 1024) {
+      showError(`The slides file is larger than ${SLIDES_MAX_MB} MB.`);
+      file = null;
+    }
+  }
+  state.slides = file || null;
+  $$(".slides-pick").forEach((pick) => {
+    pick.querySelector(".slides-label").hidden = !!state.slides;
+    pick.querySelector(".slides-chosen").hidden = !state.slides;
+    pick.querySelector(".slides-name").textContent = state.slides ? state.slides.name : "";
+    pick.querySelector(".slides-input").value = "";
+  });
+}
+
+$$(".slides-input").forEach((input) => input.addEventListener("change", (e) => setSlides(e.target.files[0])));
+$$(".slides-remove").forEach((btn) => btn.addEventListener("click", () => setSlides(null)));
+
 // ---------- upload / link ----------
 
 function setFile(file) {
@@ -377,11 +403,10 @@ $("#url-form").addEventListener("submit", async (e) => {
   clearError();
   startWorking("Sending link…");
   try {
-    const job = await api("/api/jobs/url", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: $("#url-input").value.trim() }),
-    });
+    const form = new FormData();
+    form.append("url", $("#url-input").value.trim());
+    if (state.slides) form.append("slides_file", state.slides);
+    const job = await api("/api/jobs/url", { method: "POST", body: form });
     await pollJob(job.id);
   } catch (err) {
     stopWorking();
@@ -410,6 +435,7 @@ function uploadWithProgress(blob, filename) {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("file", blob, filename);
+    if (state.slides) form.append("slides_file", state.slides);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/jobs/upload");
     Object.entries(authHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v));
@@ -471,7 +497,9 @@ async function pollJob(id) {
         }
         showResults(job);
         saveToHistory(job);
+        setSlides(null); // slides belong to this lecture; don't reuse them for the next one
       }
+      if (job.warning) showError(job.warning);
       if (job.status === "error") {
         showError(job.transcript ? `Transcript is ready, but notes failed: ${job.error}` : job.error);
       }
@@ -499,6 +527,39 @@ function fillList(el, items, empty) {
   }
 }
 
+function fillQuestions(questions) {
+  const list = $("#note-questions");
+  list.replaceChildren();
+  for (const item of questions) {
+    const li = document.createElement("li");
+    const q = document.createElement("p");
+    q.className = "question";
+    q.textContent = item.q;
+    const answer = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Show answer";
+    const a = document.createElement("p");
+    a.textContent = item.a;
+    answer.append(summary, a);
+    li.append(q, answer);
+    list.append(li);
+  }
+  $("#questions-block").hidden = !questions.length;
+}
+
+function fillTerms(terms) {
+  const list = $("#note-terms");
+  list.replaceChildren();
+  for (const item of terms) {
+    const dt = document.createElement("dt");
+    dt.textContent = item.term;
+    const dd = document.createElement("dd");
+    dd.textContent = item.definition;
+    list.append(dt, dd);
+  }
+  $("#terms-block").hidden = !terms.length;
+}
+
 function showResults(job) {
   const notes = job.notes || { title: job.label || "Notes", summary: "", key_points: [], action_items: [] };
   state.result = { transcript: job.transcript, notes };
@@ -507,6 +568,8 @@ function showResults(job) {
   $("#note-summary").textContent = notes.summary || "—";
   fillList($("#note-points"), notes.key_points || [], "—");
   fillList($("#note-actions"), notes.action_items || [], "None mentioned.");
+  fillQuestions(notes.practice_questions || []);
+  fillTerms(notes.key_terms || []);
   $("#notes-body").hidden = !job.notes;
   $("#note-transcript").textContent = job.transcript;
   $("#word-count").textContent = `(${job.transcript.split(/\s+/).filter(Boolean).length.toLocaleString()} words)`;
@@ -523,6 +586,14 @@ function toMarkdown() {
   (notes.key_points.length ? notes.key_points : ["—"]).forEach((p) => lines.push(`- ${p}`));
   lines.push("", "## Action items");
   (notes.action_items.length ? notes.action_items.map((a) => `- [ ] ${a}`) : ["None mentioned."]).forEach((a) => lines.push(a));
+  if (notes.practice_questions?.length) {
+    lines.push("", "## Practice questions");
+    notes.practice_questions.forEach((x, i) => lines.push(`${i + 1}. ${x.q}`, `   - Answer: ${x.a}`));
+  }
+  if (notes.key_terms?.length) {
+    lines.push("", "## Key terms");
+    notes.key_terms.forEach((x) => lines.push(`- **${x.term}**: ${x.definition}`));
+  }
   lines.push("", "## Full transcript", transcript);
   return lines.join("\n");
 }
@@ -731,7 +802,10 @@ $("#notion-send").addEventListener("click", async () => {
     const { url } = await postJson("/api/notion/export", {
       place: { kind: place.kind, target_id: place.target_id, link_to: place.link_to },
       title: $("#note-title").value.trim() || "Lecture notes", // the lecture's title, from its content
-      notes: { summary: notes.summary, key_points: notes.key_points, action_items: notes.action_items },
+      notes: {
+        summary: notes.summary, key_points: notes.key_points, action_items: notes.action_items,
+        practice_questions: notes.practice_questions || [], key_terms: notes.key_terms || [],
+      },
       transcript,
       local_date: new Date().toLocaleDateString("en-CA"), // YYYY-MM-DD in the user's timezone
     });

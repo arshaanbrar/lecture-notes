@@ -3,7 +3,7 @@
 Record or upload a lecture or meeting. The app gives you:
 
 1. A full **transcript** (Whisper)
-2. **AI notes**: summary, key points, action items (Llama 3 on Groq, falling back to Groq's free `gpt-oss` models if your account can't use Llama)
+2. **AI notes**: summary, key points, action items, practice questions (answers hidden until clicked) and key terms (Llama 3 on Groq, falling back to Groq's free `gpt-oss` models if your account can't use Llama)
 3. A **Notion page** with the notes and transcript, either new or added to an existing page
 
 Everything runs on free tiers: Render (hosting), Groq (Whisper + Llama 3) and the Notion API.
@@ -177,6 +177,10 @@ The AI then suggests where the notes should go, preferring where that person's l
 - **inside the class page**, or adding to their **latest lecture**.
 
 The Notion page gets the lecture's title (the one at the top of the notes, which you can edit). Check the suggestion, then click **Send to Notion**, or open **Put it somewhere else** to choose another of the suggested places. Nothing is written until you click Send.
+
+### Lecture slides (optional)
+
+Under the recording, and on the Upload tab, there's **📎 Add lecture slides**. It's optional. If you add the prof's slides (PDF or PowerPoint `.pptx`, up to 50 MB), the AI uses them to get names, terms and formulas right and to fix words the transcript misheard. Skip it and everything works the same. Slides that are only images (no selectable text) can't be read; the notes are then made from the recording alone.
 
 ### Upload / link
 

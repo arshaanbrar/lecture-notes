@@ -4,12 +4,12 @@ import shutil
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, jobs, notion, placement
+from . import config, jobs, notion, placement, slides
 from .utils import AppError
 
 logging.basicConfig(level=logging.INFO)
@@ -67,33 +67,58 @@ def auth_check():
 
 # ---------- jobs ----------
 
-@api.post("/jobs/upload")
-async def upload(file: UploadFile = File(...)):
-    workdir = jobs.new_workdir()
-    suffix = Path(file.filename or "").suffix[:10] or ".bin"
-    dest = workdir / f"input{suffix}"
-    limit = config.MAX_UPLOAD_MB * 1024 * 1024
-    size = 0
+SLIDES_MAX_MB = 50
+
+
+async def _save(upload: UploadFile, dest: Path, limit_mb: int, what: str) -> None:
+    """Stream an upload to disk, refusing empty or oversized files."""
+    limit, size = limit_mb * 1024 * 1024, 0
     with dest.open("wb") as out:
-        while chunk := await file.read(1024 * 1024):
+        while chunk := await upload.read(1024 * 1024):
             size += len(chunk)
             if size > limit:
-                break
+                raise HTTPException(status_code=413, detail=f"The {what} is larger than {limit_mb} MB.")
             out.write(chunk)
-    if size > limit or size == 0:
+    if size == 0:
+        raise HTTPException(status_code=400, detail=f"The {what} is empty.")
+
+
+async def _save_slides(upload: UploadFile | None, workdir: Path) -> Path | None:
+    """Optional lecture slides (PDF or PowerPoint) that help the notes AI."""
+    if not upload or not upload.filename:
+        return None
+    suffix = Path(upload.filename).suffix.lower()
+    if suffix not in slides.SUFFIXES:
+        raise HTTPException(status_code=400, detail="Slides must be a PDF or PowerPoint (.pptx) file.")
+    dest = workdir / f"slides{suffix}"
+    await _save(upload, dest, SLIDES_MAX_MB, "slides file")
+    return dest
+
+
+@api.post("/jobs/upload")
+async def upload(file: UploadFile = File(...), slides_file: UploadFile | None = File(None)):
+    workdir = jobs.new_workdir()
+    try:
+        suffix = Path(file.filename or "").suffix[:10] or ".bin"
+        dest = workdir / f"input{suffix}"
+        await _save(file, dest, config.MAX_UPLOAD_MB, "file")
+        slides_path = await _save_slides(slides_file, workdir)
+    except HTTPException:
         shutil.rmtree(workdir, ignore_errors=True)
-        detail = f"File is larger than {config.MAX_UPLOAD_MB} MB." if size else "The file is empty."
-        raise HTTPException(status_code=413 if size else 400, detail=detail)
-    return jobs.submit_file(dest, workdir, label=file.filename or "Recording").public()
-
-
-class UrlBody(BaseModel):
-    url: str = Field(min_length=8, max_length=2000, pattern=r"^https?://")
+        raise
+    return jobs.submit_file(dest, workdir, label=file.filename or "Recording", slides_path=slides_path).public()
 
 
 @api.post("/jobs/url")
-def from_url(body: UrlBody):
-    return jobs.submit_url(body.url).public()
+async def from_url(url: str = Form(..., min_length=8, max_length=2000, pattern=r"^https?://"),
+                   slides_file: UploadFile | None = File(None)):
+    workdir = jobs.new_workdir()
+    try:
+        slides_path = await _save_slides(slides_file, workdir)
+    except HTTPException:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise
+    return jobs.submit_url(url, workdir, slides_path).public()
 
 
 @api.get("/jobs/{job_id}")
@@ -145,10 +170,22 @@ def notion_plan(body: PlanBody):
     return placement.plan(body.person_id, class_id, body.class_text, body.note_title, body.summary)
 
 
+class Question(BaseModel):
+    q: str
+    a: str
+
+
+class Term(BaseModel):
+    term: str
+    definition: str
+
+
 class Notes(BaseModel):
     summary: str = ""
     key_points: list[str] = []
     action_items: list[str] = []
+    practice_questions: list[Question] = []
+    key_terms: list[Term] = []
 
 
 class Place(BaseModel):

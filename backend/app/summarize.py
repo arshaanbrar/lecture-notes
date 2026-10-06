@@ -1,7 +1,8 @@
-"""Turn a transcript into notes with Llama 3 on Groq.
+"""Turn a transcript (and optionally the lecture slides) into notes with an LLM on Groq.
 
 Long transcripts are summarised in parts and then merged, so no single request goes over
-Groq's free-tier tokens-per-minute limit.
+Groq's free-tier tokens-per-minute limit. Slides, when given, are used in the single-pass and
+final merge prompts to get terms, formulas and structure right.
 """
 
 import json
@@ -23,7 +24,20 @@ SCHEMA = """Return a JSON object with exactly these keys:
 "summary": a 3-6 sentence summary of what was covered
 "key_points": an array of the most important points, each one clear sentence (aim for 5-12)
 "action_items": an array of concrete tasks, assignments, deadlines or follow-ups that were mentioned, \
-written as instructions and including who/when if stated. Use an empty array if there are none."""
+written as instructions and including who/when if stated. Use an empty array if there are none.
+"practice_questions": an array of 3-6 objects {"q": "...", "a": "..."}: exam-style questions that test \
+understanding of the most important ideas, each with a short correct answer taken from the material. \
+Use an empty array if the recording has no teachable content (e.g. a short admin meeting).
+"key_terms": an array of up to 12 objects {"term": "...", "definition": "..."} for the important terms, \
+concepts or formulas, each defined in one sentence as they were used. Use an empty array if there are none."""
+
+SLIDES_NOTE = (
+    "\n\nLECTURE SLIDES (extra context from the same lecture). The transcript is the main source; use the "
+    "slides to get names, terms, formulas and the structure right, and to fix words the transcript "
+    "misheard. Don't add slide content that wasn't covered in the recording.\n{slides}"
+)
+SINGLE_SLIDES_CHARS = 8000
+MERGE_SLIDES_CHARS = 5000
 
 FULL_PROMPT = "Write notes for this transcript.\n\n{schema}\n\nTRANSCRIPT:\n{text}"
 PART_PROMPT = (
@@ -32,17 +46,23 @@ PART_PROMPT = (
 )
 MERGE_PROMPT = (
     "Below are notes written for consecutive parts of one recording, in order. Merge them into "
-    "one set of notes for the whole recording: combine the summaries into one, and remove "
-    "duplicate key points and action items.\n\n{schema}\n\nPART NOTES (JSON):\n{text}"
+    "one set of notes for the whole recording: combine the summaries into one, remove duplicate "
+    "key points, action items and key terms, and keep the 3-6 best practice questions."
+    "\n\n{schema}\n\nPART NOTES (JSON):\n{text}"
 )
 
 
-def make_notes(transcript: str, progress: Progress) -> dict:
+def _with_slides(prompt: str, slides: str, limit: int) -> str:
+    return prompt + SLIDES_NOTE.format(slides=slides[:limit]) if slides.strip() else prompt
+
+
+def make_notes(transcript: str, progress: Progress, slides: str = "") -> dict:
     limit = config.SUMMARY_CHUNK_CHARS
     chunks = split_text(transcript, limit)
     if len(chunks) <= 1:
         progress("Writing notes…")
-        return _ask(FULL_PROMPT.format(schema=SCHEMA, text=transcript), progress)
+        prompt = FULL_PROMPT.format(schema=SCHEMA, text=transcript)
+        return _ask(_with_slides(prompt, slides, SINGLE_SLIDES_CHARS), progress)
 
     partials = []
     for i, chunk in enumerate(chunks, 1):
@@ -56,11 +76,12 @@ def make_notes(transcript: str, progress: Progress) -> dict:
         if len(groups) == len(partials):
             break
         partials = [_merge(g, progress) for g in groups]
-    return _merge(partials, progress)
+    return _merge(partials, progress, slides)
 
 
-def _merge(partials: list[dict], progress: Progress) -> dict:
-    return _ask(MERGE_PROMPT.format(schema=SCHEMA, text=json.dumps(partials, ensure_ascii=False)), progress)
+def _merge(partials: list[dict], progress: Progress, slides: str = "") -> dict:
+    prompt = MERGE_PROMPT.format(schema=SCHEMA, text=json.dumps(partials, ensure_ascii=False))
+    return _ask(_with_slides(prompt, slides, MERGE_SLIDES_CHARS), progress)
 
 
 def _group(items: list[dict], limit: int) -> list[list[dict]]:
@@ -97,9 +118,20 @@ def _clean(data: dict) -> dict:
             return []
         return [str(v).strip() for v in value if str(v).strip()]
 
+    def as_pairs(value, first: str, second: str, limit: int) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+        pairs = []
+        for item in value:
+            if isinstance(item, dict) and str(item.get(first, "")).strip() and str(item.get(second, "")).strip():
+                pairs.append({first: str(item[first]).strip(), second: str(item[second]).strip()})
+        return pairs[:limit]
+
     return {
         "title": str(data.get("title") or "Notes").strip()[:150],
         "summary": str(data.get("summary") or "").strip(),
         "key_points": as_list(data.get("key_points")),
         "action_items": as_list(data.get("action_items")),
+        "practice_questions": as_pairs(data.get("practice_questions"), "q", "a", 8),
+        "key_terms": as_pairs(data.get("key_terms"), "term", "definition", 15),
     }
