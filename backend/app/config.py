@@ -18,7 +18,12 @@ def _env(name: str, default: str = "") -> str:
 
 # ⚠️ KEY — Groq API key (https://console.groq.com/keys). Used for transcription and notes.
 GROQ_API_KEY = _env("GROQ_API_KEY")
-GROQ_MODEL = _env("GROQ_MODEL", "llama-3.3-70b-versatile")
+# Models to try for notes, in order (comma-separated). The first one your Groq account can use is
+# kept, so a retired or paid-only model is skipped automatically.
+GROQ_MODELS = [m.strip() for m in _env(
+    "GROQ_MODEL",
+    "llama-3.3-70b-versatile,llama-3.1-8b-instant,openai/gpt-oss-120b,openai/gpt-oss-20b",
+).split(",") if m.strip()]
 GROQ_WHISPER_MODEL = _env("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")
 
 # "groq" = open-source Whisper hosted free by Groq (fast, works on Render's free tier)

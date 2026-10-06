@@ -15,6 +15,10 @@ MAX_ATTEMPTS = 8
 Progress = Callable[[str], None]
 
 
+class ModelUnavailable(AppError):
+    """The requested model is retired or not available to this Groq account."""
+
+
 def _headers() -> dict:
     if not config.GROQ_API_KEY:
         raise AppError("GROQ_API_KEY isn't set on the server (see README → Get a Groq key).")
@@ -35,6 +39,16 @@ def _error_message(resp: httpx.Response) -> str:
         return resp.text[:300]
 
 
+def _is_model_unavailable(resp: httpx.Response) -> bool:
+    if resp.status_code in (403, 404):
+        return True
+    try:
+        code = resp.json()["error"].get("code", "")
+    except Exception:
+        return False
+    return code in ("model_not_found", "model_decommissioned", "model_permission_blocked_org")
+
+
 def _post(path: str, progress: Progress, make_kwargs: Callable[[], dict]) -> dict:
     with httpx.Client(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
         for attempt in range(MAX_ATTEMPTS):
@@ -48,6 +62,8 @@ def _post(path: str, progress: Progress, make_kwargs: Callable[[], dict]) -> dic
                 progress(f"Groq free-tier limit hit, waiting {int(wait)}s and retrying…")
                 time.sleep(wait)
                 continue
+            if _is_model_unavailable(resp):
+                raise ModelUnavailable(_error_message(resp))
             if resp.status_code >= 400:
                 raise AppError(f"Groq error ({resp.status_code}): {_error_message(resp)}")
             return resp.json()
@@ -63,12 +79,28 @@ def transcribe_file(path: Path, progress: Progress) -> str:
     return _post("/audio/transcriptions", progress, kwargs).get("text", "").strip()
 
 
+_working_model: str | None = None
+
+
 def chat_json(system: str, user: str, progress: Progress) -> str:
-    body = {
-        "model": config.GROQ_MODEL,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-    }
-    data = _post("/chat/completions", progress, lambda: {"json": body})
-    return data["choices"][0]["message"]["content"]
+    """Ask for a JSON reply, using the first model in GROQ_MODELS this account can access."""
+    global _working_model
+    models = [_working_model] if _working_model else config.GROQ_MODELS
+    errors = []
+    for model in models:
+        body = {
+            "model": model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            data = _post("/chat/completions", progress, lambda: {"json": body})
+        except ModelUnavailable as e:
+            errors.append(f"{model}: {e}")
+            continue
+        _working_model = model
+        return data["choices"][0]["message"]["content"]
+    _working_model = None
+    raise AppError("None of the Groq models are available to your account ("
+                   + "; ".join(errors) + "). Set GROQ_MODEL to one listed at https://console.groq.com/docs/models.")

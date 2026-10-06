@@ -3,7 +3,7 @@
 Record or upload a lecture or meeting. The app gives you:
 
 1. A full **transcript** (Whisper)
-2. **AI notes**: summary, key points, action items (Llama 3 on Groq)
+2. **AI notes**: summary, key points, action items (Llama 3 on Groq, falling back to Groq's free `gpt-oss` models if your account can't use Llama)
 3. A **Notion page** with the notes and transcript, either new or added to an existing page
 
 Everything runs on free tiers: Render (hosting), Groq (Whisper + Llama 3) and the Notion API.
@@ -193,7 +193,7 @@ With Docker, build with `--build-arg LOCAL_WHISPER=true`. Groq is still used for
 | Notion: "Could not find page…" | Share that page with your integration: **•••** → **Connections**. |
 | Notion page list is empty | Only pages shared with the integration appear. See Step 2C. |
 | "Couldn't reach the server" | The free server is waking up. Wait about a minute and refresh. |
-| Model not found / decommissioned (Groq) | Groq retires models over time. Pick a current one from https://console.groq.com/docs/models and set `GROQ_MODEL` or `GROQ_WHISPER_MODEL`. |
+| "None of the Groq models are available" | Groq retires models or makes them paid-only over time. The app tries several automatically; if all fail, pick a current one from https://console.groq.com/docs/models and set `GROQ_MODEL` (comma-separated list, tried in order). |
 | Link downloads started failing | Update yt-dlp: redeploy on Render (it installs the latest) or run `pip install -U yt-dlp` locally. |
 
 ---
