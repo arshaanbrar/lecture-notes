@@ -72,17 +72,17 @@
             <div class="meter" aria-hidden="true"><div id="meter-fill"></div></div>
           </div>
           <p id="rec-note" class="hint"></p>
+          <div class="slides-pick">
+            <label class="slides-label">
+              <input type="file" class="slides-input" accept=".pdf,.pptx,application/pdf">
+              📎 Add lecture slides <span class="muted">(optional, helps make the notes more accurate)</span>
+            </label>
+            <span class="slides-chosen" hidden>📎 <span class="slides-name"></span>
+              <button type="button" class="linkish slides-remove">remove</button></span>
+          </div>
 
           <div id="recording-ready" class="ready" hidden>
             <audio id="rec-preview" controls></audio>
-            <div class="slides-pick">
-              <label class="slides-label">
-                <input type="file" class="slides-input" accept=".pdf,.pptx,application/pdf">
-                📎 Add lecture slides <span class="muted">(optional, helps make the notes more accurate)</span>
-              </label>
-              <span class="slides-chosen" hidden>📎 <span class="slides-name"></span>
-                <button type="button" class="linkish slides-remove">remove</button></span>
-            </div>
             <div class="row">
               <button id="rec-process" class="btn primary">Transcribe &amp; write notes</button>
               <a id="rec-download" class="btn" download>⬇ Save recording</a>
