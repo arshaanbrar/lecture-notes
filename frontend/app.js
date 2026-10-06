@@ -472,12 +472,14 @@ function sourceFor(viewId) {
 }
 
 function sourceCandidates(viewId) {
-  const page = tree.nodes.get(viewId)?.parent;
   const tables = [...tree.nodes.values()].filter((n) => n.type === "database" && n.id !== viewId && !tree.errors.has(n.id));
-  // Tables directly on the same page first (incl. ones tucked in a template's "do not delete"
-  // toggle); tables nested inside other pages are rarely what a view shows.
-  const direct = tables.filter((n) => n.parent === page);
-  return (direct.length ? direct : tables).slice(0, 30);
+  // Tables directly on the nearest page above the view that has any (incl. ones tucked in a
+  // template's "do not delete" toggle). Never tables from other people's areas.
+  for (const ancestor of pathTo(tree.nodes.get(viewId)?.parent).reverse()) {
+    const direct = tables.filter((n) => n.parent === ancestor);
+    if (direct.length) return direct.slice(0, 30);
+  }
+  return [];
 }
 
 const COURSE_WORDS = /course|class|subject|module|domain/i;
@@ -551,17 +553,42 @@ function lectureInfo(id) {
   return info && info !== "loading" && info.available ? info : null;
 }
 
-function updateLectureOption() {
-  const id = selectedPageId();
+function ensureLectureTarget(id) {
   const node = id && tree.nodes.get(id);
-  const inTable = node && tree.nodes.get(node.parent)?.type === "database";
+  const inTable = node && node.type === "page" && tree.nodes.get(node.parent)?.type === "database";
   if (inTable && !lectureTargets.has(id)) {
     lectureTargets.set(id, "loading");
     api(`/api/notion/lecture-target/${id}`)
       .then((info) => lectureTargets.set(id, info))
       .catch(() => lectureTargets.set(id, { available: false }))
-      .finally(() => { if (selectedPageId() === id) renderTree(); });
+      .finally(() => renderTree());
   }
+  return lectureInfo(id);
+}
+
+// Lectures of a course, shown under a view inside the course page (e.g. its "Topics" list).
+const courseLectures = new Map(); // course id -> [ids] | "loading" | null
+
+function loadCourseLectures(courseId, viewId) {
+  if (courseLectures.has(courseId)) return;
+  courseLectures.set(courseId, "loading");
+  api(`/api/notion/lectures/${courseId}`)
+    .then(({ lectures }) => {
+      lectures.forEach((l) => tree.nodes.set(l.id, { ...l, parent: viewId, lecture: true }));
+      courseLectures.set(courseId, lectures.map((l) => l.id));
+    })
+    .catch(() => courseLectures.set(courseId, null))
+    .finally(() => renderTree());
+}
+
+function updateLectureOption() {
+  const id = selectedPageId();
+  // Opening an existing lecture: adding the notes to it is the likely intent.
+  if (id && tree.nodes.get(id).lecture && lectureAutoPickedFor !== id) {
+    lectureAutoPickedFor = id;
+    $('input[name="notion-mode"][value="existing"]').checked = true;
+  }
+  ensureLectureTarget(id);
   const info = lectureInfo(id);
   const option = $("#lecture-option");
   option.hidden = !info;
@@ -653,6 +680,12 @@ function renderTree() {
     }
     // A view we can't open, but the user told us which table it shows: list that table instead.
     const blockedView = current !== null && tree.errors.has(current);
+    const course = blockedView ? tree.nodes.get(current).parent : null;
+    const courseInfo = course ? ensureLectureTarget(course) : null;
+    if (blockedView && courseInfo && !sourceFor(current)) {
+      renderCourseLectures(list, current, course, courseInfo);
+      return finishRender();
+    }
     if (blockedView && !sourceFor(current) && guessSource(current)) setViewSource(current, guessSource(current));
     const showing = blockedView && sourceFor(current) ? sourceFor(current) : current;
     if (showing !== current && !tree.ordered.has(showing)) loadChildren(showing);
@@ -662,6 +695,13 @@ function renderTree() {
       return finishRender();
     }
     const kids = kidsOf(showing);
+    // On a course page, name its unnamed lecture list (e.g. "Topics for this course").
+    const here = current && lectureInfo(current);
+    if (here) {
+      kids.map((k) => tree.nodes.get(k))
+        .filter((n) => n.type === "database" && /^untitled/i.test(n.title))
+        .forEach((n) => { n.title = `${here.database_title} for this course`; });
+    }
     if (kids.length || showing !== current) list.replaceChildren();
     if (showing !== current) {
       const note = document.createElement("li");
@@ -684,6 +724,27 @@ function renderTree() {
   }
 
   finishRender();
+}
+
+function renderCourseLectures(list, viewId, courseId, info) {
+  const view = tree.nodes.get(viewId);
+  if (/^untitled/i.test(view.title)) view.title = `${info.database_title} for this course`;
+  loadCourseLectures(courseId, viewId);
+  const ids = courseLectures.get(courseId);
+  list.replaceChildren();
+  const note = document.createElement("li");
+  note.className = "muted page-empty";
+  note.textContent = ids === "loading" ? "Loading…"
+    : ids === null ? `Couldn't load the lectures for ${info.course_title}.`
+    : `${info.database_title} for ${info.course_title}`;
+  list.append(note);
+  if (Array.isArray(ids)) {
+    ids.forEach((id) => list.append(pageRow(tree.nodes.get(id))));
+    if (!ids.length) note.textContent = `No ${info.database_title} entries for ${info.course_title} yet.`;
+  }
+  // Re-draw the breadcrumb with the friendlier view name.
+  const last = $("#page-crumbs").lastElementChild;
+  if (last) last.textContent = view.title;
 }
 
 function renderViewSourcePicker(list, viewId) {

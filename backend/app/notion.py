@@ -437,6 +437,26 @@ def lecture_target(course_id: str) -> dict | None:
     return result
 
 
+def course_lectures(course_id: str) -> list[dict]:
+    """The lectures linked to a course, newest first (e.g. Topics entries whose domain is this course)."""
+    target = lecture_target(course_id)
+    if not target:
+        return []
+    body = {
+        "page_size": 100,
+        "filter": {"property": target["link_prop"], "relation": {"contains": normalize_id(course_id)}},
+    }
+    if target["date_prop"]:
+        body["sorts"] = [{"property": target["date_prop"], "direction": "descending"}]
+    data = _request("POST", f"/databases/{target['database_id']}/query", body)
+    lectures = []
+    for page in data.get("results", []):
+        icon = page.get("icon") or {}
+        lectures.append({"id": page["id"], "type": "page", "title": _title(page),
+                         "icon": icon.get("emoji", "") if icon.get("type") == "emoji" else ""})
+    return lectures
+
+
 def create_lecture(course_id: str, title: str, notes: dict, transcript: str, day: str | None) -> str:
     target = lecture_target(course_id)
     if not target:

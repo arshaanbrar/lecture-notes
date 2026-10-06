@@ -131,7 +131,15 @@ def notion_lecture_target(page_id: str):
     target = notion.lecture_target(page_id) if notion.normalize_id(page_id) else None
     if not target:
         return {"available": False}
-    return {"available": True, "database_title": target["database_title"], "course_title": target["course_title"]}
+    return {"available": True, "database_id": target["database_id"],
+            "database_title": target["database_title"], "course_title": target["course_title"]}
+
+
+@api.get("/notion/lectures/{course_id}")
+def notion_course_lectures(course_id: str):
+    if not notion.normalize_id(course_id):
+        raise HTTPException(status_code=400, detail="Invalid Notion page ID.")
+    return {"lectures": notion.course_lectures(course_id)}
 
 
 class ExportBody(BaseModel):
