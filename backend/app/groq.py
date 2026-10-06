@@ -79,33 +79,41 @@ def transcribe_file(path: Path, progress: Progress) -> str:
     return _post("/audio/transcriptions", progress, kwargs).get("text", "").strip()
 
 
-_working_model: str | None = None
+# The first model in each list that this account can use, remembered: {"main": ..., "fast": ...}
+_working: dict[str, str] = {}
 
 
-def _chat(messages: list[dict], progress: Progress, json_mode: bool, temperature: float) -> str:
-    """Run a chat completion with the first model in GROQ_MODELS this account can access."""
-    global _working_model
-    models = [_working_model] if _working_model else config.GROQ_MODELS
+def _chat(messages: list[dict], progress: Progress, json_mode: bool, temperature: float, fast: bool = False) -> str:
+    """Run a chat completion with the first model this account can access: from GROQ_FAST_MODELS
+    for quick questions (falling back to the main list), otherwise from GROQ_MODELS."""
+    kind = "fast" if fast else "main"
+    if kind in _working:
+        models = [_working[kind]]
+    else:
+        models = config.GROQ_FAST_MODELS + [m for m in config.GROQ_MODELS if m not in config.GROQ_FAST_MODELS] \
+            if fast else config.GROQ_MODELS
     errors = []
     for model in models:
         body = {"model": model, "messages": messages, "temperature": temperature}
         if json_mode:
             body["response_format"] = {"type": "json_object"}
+        if "gpt-oss" in model and config.GROQ_REASONING_EFFORT:
+            body["reasoning_effort"] = config.GROQ_REASONING_EFFORT
         try:
             data = _post("/chat/completions", progress, lambda: {"json": body})
         except ModelUnavailable as e:
             errors.append(f"{model}: {e}")
             continue
-        _working_model = model
+        _working[kind] = model
         return data["choices"][0]["message"]["content"] or ""
-    _working_model = None
+    _working.pop(kind, None)
     raise AppError("None of the Groq models are available to your account ("
                    + "; ".join(errors) + "). Set GROQ_MODEL to one listed at https://console.groq.com/docs/models.")
 
 
-def chat_json(system: str, user: str, progress: Progress) -> str:
-    """Ask for a JSON reply."""
-    return _chat([{"role": "system", "content": system}, {"role": "user", "content": user}], progress, True, 0.2)
+def chat_json(system: str, user: str, progress: Progress, fast: bool = False) -> str:
+    """Ask for a JSON reply. `fast` uses a small quick model, for short classification questions."""
+    return _chat([{"role": "system", "content": system}, {"role": "user", "content": user}], progress, True, 0.2, fast)
 
 
 def chat_text(system: str, messages: list[dict], progress: Progress = lambda _: None) -> str:

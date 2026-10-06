@@ -2,8 +2,9 @@
 
 1. Notes: title, summary, key points, key terms, action items. Long transcripts are summarised in parts
    and then merged, so no single request goes over Groq's free-tier tokens-per-minute limit.
-2. Study extras the user picked (practice questions, flashcards, a quiz…), made in one extra
-   request from the finished notes plus excerpts of the transcript.
+2. Study extras the user picked (practice questions, flashcards, a quiz…). For a short transcript
+   they're made in the same request as the notes; for a long one, in one extra request from the
+   finished notes plus excerpts of the transcript.
 
 Slides, when given, are added to the single-pass, merge and extras prompts as context.
 """
@@ -87,8 +88,20 @@ def make_notes(transcript: str, progress: Progress, slides: str = "", extras: li
                warn: Progress = lambda _: None, source: str = "recording") -> dict:
     """`source` is "recording" (a transcript) or "document" (text read from a PDF, Word file…)."""
     note = DOCUMENT_NOTE if source == "document" else ""
-    notes = _base_notes(transcript, progress, slides, note)
     wanted = [e for e in (extras or []) if e in EXTRAS]
+    notes = None
+    if wanted and len(split_text(transcript, config.SUMMARY_CHUNK_CHARS)) <= 1:
+        # Short enough for one request: make the notes and the extras together (one AI call, not two).
+        progress("Writing notes and study extras…")
+        schema = SCHEMA + "\n" + "\n".join(f'"{key}": {EXTRAS[key][0]}' for key in wanted)
+        prompt = FULL_PROMPT.format(schema=schema, text=transcript)
+        try:
+            data = _ask_json(note + _with_slides(prompt, slides, SINGLE_SLIDES_CHARS), progress)
+            notes, wanted = {**_clean(data), **_clean_extras(data, wanted)}, []
+        except AppError:
+            pass  # try again the usual way: the notes first, then the extras on their own
+    if notes is None:
+        notes = _base_notes(transcript, progress, slides, note)
     if wanted:
         progress("Making study extras…")
         try:

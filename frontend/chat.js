@@ -4,13 +4,12 @@
 // - while recording: the audio recorded so far, transcribed a bit at a time as questions come in;
 // - after: the notes and full transcript;
 // - otherwise it's a general study tutor.
-// Relies on globals from app.js: state, api, $, fmtTime.
+// Relies on globals from app.js (state, api, $, fmtTime) and live.js (live, liveSync).
 
 const chat = {
   messages: [],      // {role: "user"|"assistant", content}
   busy: false,
   contextKey: null,  // which lecture the conversation is about
-  live: { recId: null, transcript: "", synced: 0 },
 };
 
 const SUGGESTIONS = {
@@ -22,13 +21,13 @@ const SUGGESTIONS = {
 function chatMode() {
   if (state.rec) return "live";
   if (state.result) return "after";
-  if (chat.live.transcript) return "recorded"; // stopped, notes not made yet
+  if (live.transcript) return "recorded"; // stopped, notes not made yet
   return "none";
 }
 
 function chatContextKey() {
   const mode = chatMode();
-  if (mode === "live" || mode === "recorded") return `rec:${chat.live.recId || state.rec?.startedAt}`;
+  if (mode === "live" || mode === "recorded") return `rec:${live.recId || state.rec?.startedAt}`;
   if (mode === "after") return `notes:${state.historyId || state.result.notes.title}`;
   return "none";
 }
@@ -60,32 +59,16 @@ function updateChatHeader() {
 
 // ----- catching up on a recording in progress -----
 
+// The recording is transcribed every few minutes anyway (live.js); before answering, catch up on
+// the last few minutes too.
 async function catchUpOnRecording() {
-  const rec = state.rec;
-  if (!rec) return;
-  if (chat.live.recId !== rec.startedAt) chat.live = { recId: rec.startedAt, transcript: "", synced: 0 };
-  const chunks = rec.chunks;
-  if (chunks.length <= chat.live.synced) return;
-  // Only send what's new. The first chunk carries the audio file's header, so later pieces
-  // need it in front to be readable.
-  const fresh = chunks.slice(chat.live.synced);
-  const parts = chat.live.synced === 0 ? fresh : [chunks[0], ...fresh];
-  const upTo = chunks.length;
-  const type = rec.mimeType || "audio/webm";
-  const form = new FormData();
-  form.append("audio_file", new Blob(parts, { type }), type.includes("mp4") ? "snippet.m4a" : "snippet.webm");
-  // The header piece is the recording's first second; drop it again so it isn't heard twice.
-  if (chat.live.synced > 0) form.append("skip_seconds", "1");
-  const { text } = await api("/api/assistant/transcribe", { method: "POST", body: form });
-  if (chat.live.recId !== rec.startedAt) return; // a new recording started meanwhile
-  chat.live.synced = upTo;
-  if (text) chat.live.transcript += (chat.live.transcript ? " " : "") + text;
+  if (state.rec) await liveSync(state.rec);
 }
 
 function chatContext() {
   const mode = chatMode();
-  if (mode === "live") return { live: true, transcript: chat.live.transcript };
-  if (mode === "recorded") return { transcript: chat.live.transcript, title: "Lecture just recorded" };
+  if (mode === "live") return { live: true, transcript: live.transcript };
+  if (mode === "recorded") return { transcript: live.transcript, title: "Lecture just recorded" };
   if (mode === "after") {
     const n = state.result.notes;
     return {

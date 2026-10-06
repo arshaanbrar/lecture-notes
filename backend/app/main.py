@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import assistant, config, jobs, notion, placement, slides, summarize
+from . import assistant, audio, config, jobs, notion, placement, slides, summarize
 from .utils import AppError
 
 logging.basicConfig(level=logging.INFO)
@@ -100,9 +100,14 @@ def _extras(value: str) -> list[str]:
     return [e for e in value.split(",") if e in summarize.EXTRAS]
 
 
+def _options(slides_path: Path | None, extras: str, place: bool, usual_person_id: str) -> jobs.Options:
+    return jobs.Options(slides_path=slides_path, extras=_extras(extras), place=place,
+                        usual_person_id=usual_person_id[:64])
+
+
 @api.post("/jobs/upload")
 async def upload(file: UploadFile = File(...), slides_file: UploadFile | None = File(None),
-                 extras: str = Form("")):
+                 extras: str = Form(""), place: bool = Form(True), usual_person_id: str = Form("")):
     workdir = jobs.new_workdir()
     try:
         suffix = Path(file.filename or "").suffix[:10] or ".bin"
@@ -112,20 +117,35 @@ async def upload(file: UploadFile = File(...), slides_file: UploadFile | None = 
     except HTTPException:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
-    return jobs.submit_file(dest, workdir, label=file.filename or "Recording", slides_path=slides_path,
-                            extras=_extras(extras)).public()
+    return jobs.submit_file(dest, workdir, file.filename or "Recording",
+                            _options(slides_path, extras, place, usual_person_id)).public()
 
 
 @api.post("/jobs/url")
 async def from_url(url: str = Form(..., min_length=8, max_length=2000, pattern=r"^https?://"),
-                   slides_file: UploadFile | None = File(None), extras: str = Form("")):
+                   slides_file: UploadFile | None = File(None), extras: str = Form(""),
+                   place: bool = Form(True), usual_person_id: str = Form("")):
     workdir = jobs.new_workdir()
     try:
         slides_path = await _save_slides(slides_file, workdir)
     except HTTPException:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
-    return jobs.submit_url(url, workdir, slides_path, _extras(extras)).public()
+    return jobs.submit_url(url, workdir, _options(slides_path, extras, place, usual_person_id)).public()
+
+
+@api.post("/jobs/text")
+async def from_text(transcript: str = Form(..., min_length=1, max_length=400_000),
+                    label: str = Form("Recording", max_length=200), slides_file: UploadFile | None = File(None),
+                    extras: str = Form(""), place: bool = Form(True), usual_person_id: str = Form("")):
+    """A recording the page already transcribed while it was being made: only the notes are left."""
+    workdir = jobs.new_workdir()
+    try:
+        slides_path = await _save_slides(slides_file, workdir)
+    except HTTPException:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise
+    return jobs.submit_text(transcript, workdir, label, _options(slides_path, extras, place, usual_person_id)).public()
 
 
 @api.get("/jobs/{job_id}")
@@ -255,16 +275,19 @@ SNIPPET_MAX_MB = 25
 
 @api.post("/assistant/transcribe")
 async def assistant_transcribe(audio_file: UploadFile = File(...), skip_seconds: float = Form(0, ge=0, le=10)):
-    """Transcribe the audio recorded since the last question (used mid-lecture)."""
+    """Transcribe the audio recorded since the last time (used all through a recording)."""
     workdir = jobs.new_workdir()
     try:
         dest = workdir / ("snippet" + (Path(audio_file.filename or "").suffix[:10] or ".webm"))
         await _save(audio_file, dest, SNIPPET_MAX_MB, "audio")
         try:
             text = assistant.transcribe_snippet(dest, workdir, skip_seconds)
-        except AppError:
+        except audio.TooShort:
             text = ""  # too short or silent: nothing new to add
-        return {"text": text}
+        except AppError as e:
+            # Unreadable audio or Groq trouble: the page then transcribes the whole recording at the end.
+            return {"text": "", "ok": False, "error": str(e)}
+        return {"text": text, "ok": True}
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

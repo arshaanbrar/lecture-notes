@@ -24,6 +24,13 @@ GROQ_MODELS = [m.strip() for m in _env(
     "GROQ_MODEL",
     "llama-3.3-70b-versatile,llama-3.1-8b-instant,openai/gpt-oss-120b,openai/gpt-oss-20b",
 ).split(",") if m.strip()]
+# Small, fast models for quick questions (whose lecture is this, which class, where in Notion).
+# They have their own free-tier limits, so these don't use up the notes model's. Falls back to GROQ_MODEL.
+GROQ_FAST_MODELS = [m.strip() for m in _env(
+    "GROQ_FAST_MODEL", "openai/gpt-oss-20b,llama-3.1-8b-instant").split(",") if m.strip()]
+# How hard gpt-oss models "think" before answering: low is faster and uses far fewer tokens,
+# and is plenty for notes. (Ignored by other models.)
+GROQ_REASONING_EFFORT = _env("GROQ_REASONING_EFFORT", "low")
 GROQ_WHISPER_MODEL = _env("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")
 
 # "groq" = open-source Whisper hosted free by Groq (fast, works on Render's free tier)

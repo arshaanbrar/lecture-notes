@@ -113,6 +113,15 @@ class FakeNotion:
         raise AppError(f"unexpected {method} {path}")
 
 
+EXTRAS = {
+    "practice_questions": [{"q": "Two steps?", "a": "Base case, inductive step."}],
+    "flashcards": [{"front": "Base case", "back": "P(1)"}],
+    "quiz": [{"question": "First?", "options": ["a", "b", "c", "d"], "answer": 1, "explanation": "b"}],
+    "cheat_sheet": ["P(1) and P(k)→P(k+1)"],
+    "explanations": [{"topic": "Induction", "explanation": "Dominoes."}],
+}
+
+
 class FakeAI:
     """Stand-in for Groq: deterministic answers based on what the prompt asks for."""
 
@@ -120,7 +129,7 @@ class FakeAI:
         self.prompts: list[str] = []
         self.fail_extras = False
 
-    def chat_json(self, system, prompt, progress):
+    def chat_json(self, system, prompt, progress, fast=False):
         self.prompts.append(prompt)
         if "which student" in system:
             if "discrete" in prompt.split("These students")[0].lower():
@@ -135,15 +144,13 @@ class FakeAI:
         if "Here are notes from a lecture" in prompt:
             if self.fail_extras:
                 raise AppError("busy")
-            return json.dumps({
-                "practice_questions": [{"q": "Two steps?", "a": "Base case, inductive step."}],
-                "flashcards": [{"front": "Base case", "back": "P(1)"}],
-                "quiz": [{"question": "First?", "options": ["a", "b", "c", "d"], "answer": 1, "explanation": "b"}],
-                "cheat_sheet": ["P(1) and P(k)→P(k+1)"],
-                "explanations": [{"topic": "Induction", "explanation": "Dominoes."}],
-            })
-        return json.dumps({"title": "Proofs by Induction", "summary": "Induction.", "key_points": ["Base case first"],
-                           "key_terms": [{"term": "Base case", "definition": "P(1)."}], "action_items": ["Read 5.1"]})
+            return json.dumps(EXTRAS)
+        notes = {"title": "Proofs by Induction", "summary": "Induction.", "key_points": ["Base case first"],
+                 "key_terms": [{"term": "Base case", "definition": "P(1)."}], "action_items": ["Read 5.1"]}
+        asked = {k: v for k, v in EXTRAS.items() if f'"{k}":' in prompt}  # extras asked for with the notes
+        if asked and self.fail_extras:
+            raise AppError("busy")
+        return json.dumps({**notes, **asked})
 
     def chat_text(self, system, messages, progress=None):
         self.prompts.append(system)

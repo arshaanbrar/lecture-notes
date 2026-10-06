@@ -8,6 +8,7 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.app import audio, config, groq, main, notion, placement, transcribe  # noqa: E402
+from backend.app.utils import AppError  # noqa: E402
 from tests.fakes import FakeAI, FakeNotion  # noqa: E402
 
 
@@ -17,6 +18,15 @@ def fresh_caches():
     for cache in (notion._table_cache, notion._sources_cache, notion._block_parents, placement._classes_cache):
         cache.clear()
     yield
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Tests never reach the real Notion or Groq; the fakes below replace these where needed."""
+    def offline(*args, **kwargs):
+        raise AppError("offline in tests")
+    monkeypatch.setattr(notion, "_request", offline)
+    monkeypatch.setattr(groq, "_post", offline)
 
 
 @pytest.fixture

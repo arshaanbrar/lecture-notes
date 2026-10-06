@@ -182,6 +182,7 @@ async function startRecording() {
   const recorder = new MediaRecorder(dest.stream, mimeType ? { mimeType, audioBitsPerSecond: 32000 } : undefined);
   const rec = { recorder, streams: [sysStream, micStream], ctx, chunks: [], startedAt: Date.now(), mimeType: recorder.mimeType || mimeType };
   state.rec = rec;
+  liveStart(rec); // transcribe as it goes, and guess where in Notion it belongs (live.js)
 
   // Back up every second of audio on this device, so a crash or closed tab doesn't lose it.
   hideRecoverCard();
@@ -339,6 +340,7 @@ function finishRecording(rec) {
   rec.ctx.close();
   state.rec = null;
   releaseScreen();
+  liveFinish(rec); // transcribe the last few minutes now
 
   $("#rec-btn").textContent = "● Start recording";
   $("#rec-btn").classList.remove("recording");
@@ -357,6 +359,7 @@ function finishRecording(rec) {
 
 function showRecording(blob, type, startedAt) {
   state.blob = blob;
+  state.blobStartedAt = startedAt;
   const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
   const url = URL.createObjectURL(blob);
   const d = new Date(startedAt), pad = (n) => String(n).padStart(2, "0");
@@ -417,11 +420,41 @@ $("#rec-discard").addEventListener("click", () => {
   $("#rec-timer").textContent = "00:00";
 });
 
-$("#rec-process").addEventListener("click", () => {
-  if (!state.blob) return;
+$("#rec-process").addEventListener("click", async () => {
+  if (!state.blob || state.busy) return;
+  if (await processLiveTranscript()) return;
   const ext = $("#rec-download").download.split(".").pop();
   processUpload(state.blob, `recording.${ext}`, true);
 });
+
+// Most of the recording was transcribed while it was being made (live.js), so only the notes are
+// left to write. Returns false if that didn't work out; the recording is then uploaded as usual.
+async function processLiveTranscript() {
+  const startedAt = state.blobStartedAt;
+  if (live.recId !== startedAt) return false;
+  clearError();
+  startWorking("Finishing the transcript…");
+  const transcript = await liveTranscriptFor(startedAt);
+  if (!transcript) return false;
+  const placement = livePlacementFor(startedAt);
+  try {
+    const form = new FormData();
+    form.append("transcript", transcript);
+    form.append("label", "Recording");
+    form.append("extras", chosenExtras().join(","));
+    form.append("usual_person_id", recall(WHO_KEY));
+    form.append("place", placement ? "false" : "true"); // already worked out during the lecture
+    if (state.slides) form.append("slides_file", state.slides);
+    const job = await api("/api/jobs/text", { method: "POST", body: form });
+    state.fromRecording = true;
+    state.earlyPlacement = placement;
+    await pollJob(job.id);
+  } catch (err) {
+    stopWorking();
+    showError(err.message);
+  }
+  return true;
+}
 
 window.addEventListener("beforeunload", (e) => {
   if (state.rec || state.busy) { e.preventDefault(); e.returnValue = ""; }
@@ -517,6 +550,7 @@ $("#url-form").addEventListener("submit", async (e) => {
     const form = new FormData();
     form.append("url", $("#url-input").value.trim());
     form.append("extras", chosenExtras().join(","));
+    form.append("usual_person_id", recall(WHO_KEY));
     if (state.slides) form.append("slides_file", state.slides);
     const job = await api("/api/jobs/url", { method: "POST", body: form });
     await pollJob(job.id);
@@ -548,6 +582,7 @@ function uploadWithProgress(blob, filename) {
     const form = new FormData();
     form.append("file", blob, filename);
     form.append("extras", chosenExtras().join(","));
+    form.append("usual_person_id", recall(WHO_KEY));
     if (state.slides) form.append("slides_file", state.slides);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/jobs/upload");
@@ -573,6 +608,7 @@ function uploadWithProgress(blob, filename) {
 async function processUpload(blob, filename, fromRecording) {
   clearError();
   state.fromRecording = fromRecording;
+  state.earlyPlacement = null;
   startWorking(isDocument(filename) ? "Uploading document…" : "Uploading…");
   $("#upload-progress").hidden = false;
   $("#upload-fill").style.width = "0";
@@ -608,6 +644,9 @@ async function pollJob(id) {
           store.backupClear().catch(() => {});
           $("#rec-note").textContent = "";
         }
+        // Where in Notion it goes, if that was worked out alongside the notes (or during the lecture).
+        sendState.early = state.earlyPlacement || job.placement || null;
+        state.earlyPlacement = null;
         showResults(job);
         saveToHistory(job);
         setSlides(null); // slides belong to this lecture; don't reuse them for the next one
@@ -863,9 +902,13 @@ async function guessOwner() {
   $("#class-step").hidden = true;
   $("#plan-step").hidden = true;
   let guess = {};
-  try {
-    guess = await postJson("/api/notion/guess", { ...noteContext(), usual_person_id: recall(WHO_KEY) });
-  } catch { /* fall back to the saved name */ }
+  const early = sendState.early; // already worked out while the notes were being written
+  if (early) guess = early;
+  else {
+    try {
+      guess = await postJson("/api/notion/guess", { ...noteContext(), usual_person_id: recall(WHO_KEY) });
+    } catch { /* fall back to the saved name */ }
+  }
   if (seq !== sendState.guessSeq) return; // the user picked a name themselves meanwhile
 
   const known = sendState.people?.some((p) => p.id === guess.person_id);
@@ -985,6 +1028,12 @@ async function makePlan() {
   };
   if (!body.person_id || (!body.class_id && !body.class_text)) return;
 
+  // Worked out already (during the lecture, or while the notes were written) for this same choice?
+  const early = sendState.early;
+  sendState.early = null;
+  const ready = early?.plan && early.plan_for && early.plan_for.person_id === body.person_id
+    && (early.plan_for.class_id || null) === body.class_id && (early.plan_for.class_text || "") === body.class_text;
+
   const seq = ++sendState.planSeq;
   $("#notion-result").textContent = "";
   $("#plan-step").hidden = false;
@@ -994,7 +1043,7 @@ async function makePlan() {
   $("#plan-alt").replaceChildren();
   $("#notion-send").disabled = true;
   try {
-    const plan = await postJson("/api/notion/plan", body);
+    const plan = ready ? early.plan : await postJson("/api/notion/plan", body);
     if (seq !== sendState.planSeq) return; // a newer choice replaced this one
     sendState.plan = plan;
     $("#plan-alt").replaceChildren(...plan.candidates.map((c, i) => new Option(c.label, String(i))));
@@ -1017,6 +1066,7 @@ function showPlace(index, reason) {
 
 $("#who").addEventListener("change", () => {
   sendState.guessSeq++; // the user chose; ignore any guess still on its way
+  sendState.early = null;
   $("#who-hint").textContent = "";
   remember(WHO_KEY, $("#who").value);
   loadClasses();
@@ -1100,6 +1150,7 @@ async function renderHistory() {
     open.append(title, meta);
     open.addEventListener("click", () => {
       clearError();
+      sendState.early = null;
       showResults({ id: item.id, label: item.title, notes: item.notes, transcript: item.transcript });
     });
     const remove = document.createElement("button");

@@ -1,5 +1,6 @@
 """Whisper transcription — hosted on Groq (default) or run locally with faster-whisper."""
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import audio, config, groq
@@ -8,6 +9,8 @@ from .utils import AppError
 
 # 10-minute chunks at 32 kbps ≈ 2.4 MB each, far under Groq's 25 MB free-tier upload limit.
 GROQ_CHUNK_SECONDS = 600
+# Long recordings: transcribe this many pieces at once (Groq's free tier allows 20 requests a minute).
+PARALLEL_PIECES = 3
 
 _local_model = None
 
@@ -22,10 +25,21 @@ def transcribe(path: Path, workdir: Path, progress: Progress) -> str:
 
 def _groq(path: Path, workdir: Path, progress: Progress) -> str:
     chunks = audio.split(path, workdir, GROQ_CHUNK_SECONDS)
-    texts = []
-    for i, chunk in enumerate(chunks, 1):
-        progress(f"Transcribing… part {i} of {len(chunks)}" if len(chunks) > 1 else "Transcribing…")
-        texts.append(groq.transcribe_file(chunk, progress))
+    if len(chunks) == 1:
+        progress("Transcribing…")
+        return groq.transcribe_file(chunks[0], progress)
+    done = 0
+
+    def one(chunk: Path) -> str:
+        nonlocal done
+        text = groq.transcribe_file(chunk, progress)
+        done += 1
+        progress(f"Transcribing… {done} of {len(chunks)} parts done")
+        return text
+
+    progress(f"Transcribing {len(chunks)} parts…")
+    with ThreadPoolExecutor(max_workers=PARALLEL_PIECES) as pool:
+        texts = list(pool.map(one, chunks))  # keeps the original order
     return " ".join(t for t in texts if t)
 
 

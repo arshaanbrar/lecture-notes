@@ -20,6 +20,10 @@ def _run(cmd: list[str]) -> str:
     return proc.stdout
 
 
+class TooShort(AppError):
+    """The audio is empty or too short: nothing to transcribe, but nothing is broken either."""
+
+
 def duration(path: Path) -> float:
     out = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                 "-of", "default=nw=1:nk=1", str(path)])
@@ -37,7 +41,7 @@ def normalize(src: Path, workdir: Path, skip_seconds: float = 0) -> Path:
     _run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src), *skip,
           "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k", str(out)])
     if duration(out) < 0.5:
-        raise AppError("The audio is empty or too short to transcribe.")
+        raise TooShort("The audio is empty or too short to transcribe.")
     return out
 
 

@@ -20,6 +20,8 @@ You never edit code to add keys. All keys are environment variables:
 | `NOTION_TOKEN` | Notion integration secret (`ntn_…`) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | For Notion export |
 | `NOTION_PARENT_PAGE_ID` | A fallback page offered as a last-resort place for notes (paste its URL) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | Optional |
 | `HIDDEN_PEOPLE` | Names of people's top-level Notion pages to leave off the site, comma-separated (default `Ryan`). Their Notion isn't changed | — | Optional |
+| `GROQ_FAST_MODEL` | Small quick models for "whose lecture / which class / where", comma-separated, tried in order (default `openai/gpt-oss-20b,llama-3.1-8b-instant`). They have their own free-tier limits, so they don't eat into the notes model's | — | Optional |
+| `GROQ_REASONING_EFFORT` | How much gpt-oss models "think" before answering: `low` (default) is faster and uses far fewer tokens | — | Optional |
 | `APP_PASSWORD` | Optional password that every visitor must enter | You make it up | Recommended |
 
 - **Locally:** copy `.env.example` to `.env` and fill it in. `.env` is git-ignored.
@@ -34,12 +36,24 @@ You never edit code to add keys. All keys are environment variables:
 ```
 Browser (HTML/JS)                         FastAPI server (Docker on Render)
 ─────────────────                         ─────────────────────────────────
-Record mic / system / both ──upload──▶  ffmpeg → 16 kHz mono MP3, 10-min chunks
-Upload file / paste link   ──────────▶  yt-dlp downloads links
-                                         Whisper (Groq) → transcript
-           ◀──── polls job status ────  Llama 3 (Groq) → summary / key points / action items
+Record mic / system / both
+  every 3 min: new audio   ──────────▶  ffmpeg → Whisper (Groq) → that part of the transcript
+  once there's enough       ──────────▶  AI guesses who / which class, then the Notion spot
+  stop: transcript text    ──────────▶  notes (Groq)
+Upload file / paste link   ──────────▶  yt-dlp downloads links; ffmpeg → 10-min pieces,
+                                         Whisper 3 at a time; notes + Notion guess side by side
+Upload a document          ──────────▶  text read (OCR for scans); notes + Notion guess side by side
+           ◀──── polls job status ────
 Send to Notion             ──────────▶  Notion API (one shared integration)
 ```
+
+**Speed and AI usage.** A recording is transcribed every 3 minutes while it's being made. When you stop, only the last few minutes are left: there's no big upload, and the lecture isn't transcribed twice (the study helper chat reuses the same transcript). While recording, the AI also guesses whose lecture it is and which class, checking again as it goes until two guesses in a row agree, then works out the Notion spot. So when the notes are ready, Send to Notion is too. For uploads, links and documents, the server does the same guess while the notes are being written. To save AI usage:
+- quick questions use a small, fast model;
+- gpt-oss models "think" less (`GROQ_REASONING_EFFORT=low`);
+- short lectures get their notes and study extras in one AI call;
+- the AI is only asked where to put the notes when it's a close call.
+
+If a piece of the live transcript can't be read (e.g. a browser that records in a format that can't be cut into pieces), the recording is uploaded and transcribed in full at the end, as before.
 
 ```
 lecture-notes/
@@ -52,8 +66,9 @@ lecture-notes/
 │   ├── summarize.py   # Llama 3 notes, chunked for long transcripts
 │   ├── groq.py        # Groq client with retries for free-tier rate limits
 │   ├── notion.py      # list pages, create page, append to page
+│   ├── placement.py   # whose lecture, which class, where in Notion
 │   └── utils.py
-├── frontend/          # index.html, styles.css, app.js (no build step)
+├── frontend/          # index.html, styles.css, app.js, live.js (transcribe + guess while recording), chat.js (no build step)
 ├── Dockerfile         # installs ffmpeg
 ├── render.yaml        # one-click Render Blueprint
 ├── requirements.txt
@@ -167,7 +182,7 @@ For system audio, the browser shows a share dialog. **Pick a tab, window or scre
 
 ### Sending to Notion
 
-After the notes are written, the AI guesses **whose lecture it is and which class**: it compares what the lecture was about with everyone's classes (and, for people without a class list, the titles of their lecture pages). Both answers are pre-filled with a "🤖 Guessed from the lecture" note, and you can change either one. If two people take the same class, the name this device usually sends for breaks the tie.
+While the lecture is recorded (or, for an upload, while the notes are written), the AI guesses **whose lecture it is and which class**: it compares what the lecture was about with everyone's classes (and, for people without a class list, the titles of their lecture pages). Both answers are pre-filled with a "🤖 Guessed from the lecture" note, and you can change either one. If two people take the same class, the name this device usually sends for breaks the tie.
 
 The **Send to Notion** box asks two things:
 

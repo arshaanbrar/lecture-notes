@@ -155,22 +155,23 @@ def guess_owner(note_title: str, summary: str, usual_person_id: str = "") -> dic
     try:
         data = json.loads(groq.chat_json(
             "You figure out which student and class a lecture recording belongs to. Reply with JSON only.",
-            prompt, lambda _: None))
+            prompt, lambda _: None, fast=True))
         p_num = int(str(data.get("person", "")).lstrip("Pp"))
     except (AppError, ValueError, TypeError, json.JSONDecodeError):
         return {"person_id": None}
     if not 0 <= p_num < len(everyone) or data.get("confident") is False:
         return {"person_id": None}
 
-    class_id = None
+    class_id, class_title = None, ""
     try:
         c_num = int(str(data.get("class") or "").lstrip("Cc"))
         if 0 <= c_num < len(class_index) and class_index[c_num][0] == p_num:
-            class_id = class_index[c_num][1]["id"]
+            class_id, class_title = class_index[c_num][1]["id"], class_index[c_num][1]["title"]
     except ValueError:
         pass
     class_name = "" if class_id else str(data.get("class_name") or "").strip()[:80]
-    return {"person_id": everyone[p_num]["id"], "class_id": class_id, "class_name": class_name}
+    return {"person_id": everyone[p_num]["id"], "person_name": everyone[p_num]["title"],
+            "class_id": class_id, "class_name": class_name, "class_title": class_title or class_name}
 
 
 def _guess_class(found: list[dict], note_title: str, summary: str) -> str | None:
@@ -182,7 +183,7 @@ def _guess_class(found: list[dict], note_title: str, summary: str) -> str | None
               '"confident": true|false}. Use -1 if none of them fits.')
     try:
         data = json.loads(groq.chat_json(
-            "You match lecture notes to the student's class. Reply with JSON only.", prompt, lambda _: None))
+            "You match lecture notes to the student's class. Reply with JSON only.", prompt, lambda _: None, fast=True))
         index = int(data.get("index", -1))
     except (AppError, ValueError, TypeError, json.JSONDecodeError):
         return None
@@ -289,8 +290,18 @@ def plan(person_id: str, class_id: str | None, class_text: str, note_title: str,
     return {"candidates": ranked, "best": best, "reason": reason}
 
 
+def _obvious(ranked: list[dict]) -> bool:
+    """True when the heuristic's top place clearly beats the rest, so asking the AI is a waste."""
+    if len(ranked) < 2:
+        return True
+    top, second = ranked[0]["score"], ranked[1]["score"]
+    return (top >= 100 > second) or top >= 1.5 * second + 10
+
+
 def _choose(ranked: list[dict], person: str, class_title: str, note_title: str, summary: str):
-    """Ask the AI to pick the best place."""
+    """Pick the best place: the obvious one, or ask the AI when it's close."""
+    if _obvious(ranked):
+        return 0, ""
     listing = "\n".join(
         f"{i}. {c['label']} — at: {c['where']}"
         + (f" — existing titles there: {'; '.join(c['examples'])}" if c["examples"] else "")
@@ -309,7 +320,7 @@ def _choose(ranked: list[dict], person: str, class_title: str, note_title: str, 
     try:
         data = json.loads(groq.chat_json(
             "You file lecture notes into the right place in a student's Notion. Reply with JSON only.",
-            prompt, lambda _: None))
+            prompt, lambda _: None, fast=True))
         choice = int(data.get("choice", 0))
         reason = str(data.get("reason") or "").strip()[:200]
     except (AppError, ValueError, TypeError, json.JSONDecodeError):
@@ -328,3 +339,28 @@ def send(place: dict, title: str, notes: dict, transcript: str, day: str | None)
     if kind == "append":
         return notion.append_to_page(target, title, notes, transcript)
     raise AppError("Pick where to save the notes first.")
+
+
+# ---------- all at once (while the notes are being written) ----------
+
+def excerpt(transcript: str, limit: int = 1500) -> str:
+    """The start and the latest part of a transcript: enough to tell what the lecture is about."""
+    if len(transcript) <= limit:
+        return transcript
+    head = limit // 3
+    return transcript[:head] + " … " + transcript[-(limit - head):]
+
+
+def prepare(transcript: str, usual_person_id: str = "") -> dict | None:
+    """Guess whose lecture it is and which class, and plan where it goes, from the transcript alone.
+    Returns {"person_id", "class_id", "class_name", "plan", "plan_for"} or None if it can't tell."""
+    about = excerpt(transcript)
+    guess = guess_owner("", about, usual_person_id)
+    if not guess.get("person_id"):
+        return None
+    result = {**guess, "plan": None}
+    if guess.get("class_id") or guess.get("class_name"):
+        result["plan"] = plan(guess["person_id"], guess.get("class_id"), guess.get("class_name") or "", "", about)
+        result["plan_for"] = {"person_id": guess["person_id"], "class_id": guess.get("class_id"),
+                              "class_text": "" if guess.get("class_id") else guess.get("class_name") or ""}
+    return result
