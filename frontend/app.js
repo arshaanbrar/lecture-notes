@@ -453,10 +453,9 @@ const tree = { loaded: false, nodes: new Map(), children: new Map(), ordered: ne
 
 function kidsOf(id) {
   const known = tree.children.get(id) || [];
-  if (id === null || !tree.ordered.has(id)) return known;
-  const ordered = tree.ordered.get(id);
-  const seen = new Set(ordered);
-  return [...ordered, ...known.filter((k) => !seen.has(k))].filter((k) => tree.nodes.has(k));
+  const ordered = id === null ? null : tree.ordered.get(id);
+  // Once a page's real contents are loaded, show exactly those (in Notion's order).
+  return (ordered || known).filter((k) => tree.nodes.has(k));
 }
 
 async function loadChildren(id, refresh = false) {
@@ -473,9 +472,14 @@ async function loadChildren(id, refresh = false) {
         if (old) tree.children.set(existing.parent, old.filter((k) => k !== child.id));
       }
     }
-    tree.ordered.set(id, children.map((c) => c.id));
+    // Things inside collapsed toggles (template internals) stay searchable but aren't listed.
+    const visible = children.filter((c) => !c.hidden).map((c) => c.id);
+    if (kind === "database") {
+      visible.sort((a, b) => tree.nodes.get(a).title.localeCompare(tree.nodes.get(b).title, undefined, { numeric: true }));
+    }
+    tree.ordered.set(id, visible);
   } catch {
-    tree.ordered.set(id, []); // fall back to what search found (A–Z)
+    tree.ordered.set(id, null); // fall back to what search found (A–Z)
   } finally {
     tree.loading.delete(id);
   }

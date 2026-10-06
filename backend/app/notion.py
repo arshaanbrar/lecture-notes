@@ -154,32 +154,53 @@ def _icon_lookup() -> dict[str, str]:
     return {n["id"]: n["icon"] for n in (_tree_cache["nodes"] or [])}
 
 
+def _block_text(block: dict) -> str:
+    content = block.get(block.get("type", ""), {}) or {}
+    return "".join(t.get("plain_text", "") for t in content.get("rich_text", [])).strip()
+
+
+def _is_collapsed(block: dict) -> bool:
+    kind = block.get("type", "")
+    return kind == "toggle" or (kind.startswith("heading_") and block.get(kind, {}).get("is_toggleable"))
+
+
 def _page_children(page_id: str) -> list[dict]:
+    """Sub-pages and tables on a page, top to bottom. Items inside collapsed toggles are marked
+    hidden (usually template internals); an unnamed table takes the text around it as its name."""
     icons = _icon_lookup()
     found: list[dict] = []
     budget = [MAX_BLOCK_REQUESTS]
 
-    def walk(block_id: str, depth: int) -> None:
+    def walk(block_id: str, depth: int, label: str, hidden: bool) -> None:
         cursor = None
         while budget[0] > 0:
             budget[0] -= 1
             data = _request("GET", f"/blocks/{block_id}/children?page_size=100"
                             + (f"&start_cursor={cursor}" if cursor else ""))
+            nearby = label  # the last bit of text seen, e.g. a "Courses" heading above a table
             for block in data.get("results", []):
                 kind = block.get("type")
                 if kind == "child_page":
                     found.append({"id": block["id"], "type": "page", "icon": icons.get(block["id"], ""),
-                                  "title": block["child_page"].get("title") or "Untitled"})
+                                  "title": block["child_page"].get("title") or "Untitled", "hidden": hidden})
                 elif kind == "child_database":
+                    title = block["child_database"].get("title", "").strip()
+                    if nearby and (not title or title.startswith("View of ")):
+                        title = nearby
                     found.append({"id": block["id"], "type": "database", "icon": icons.get(block["id"], ""),
-                                  "title": block["child_database"].get("title") or "Untitled"})
+                                  "title": title or "Untitled", "hidden": hidden})
                 elif kind in CONTAINER_BLOCKS and block.get("has_children") and depth < MAX_CONTAINER_DEPTH:
-                    walk(block["id"], depth + 1)
+                    # Layout blocks (columns) have no text of their own, so they keep the nearby label.
+                    layout = kind in ("column_list", "column", "synced_block")
+                    walk(block["id"], depth + 1, nearby if layout else _block_text(block)[:60],
+                         hidden or _is_collapsed(block))
+                elif _block_text(block):
+                    nearby = _block_text(block)[:60]
             if not data.get("has_more"):
                 return
             cursor = data.get("next_cursor")
 
-    walk(page_id, 0)
+    walk(page_id, 0, "", False)
     return found
 
 
