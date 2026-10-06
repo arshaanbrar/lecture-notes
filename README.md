@@ -3,7 +3,7 @@
 Record or upload a lecture or meeting. The app gives you:
 
 1. A full **transcript** (Whisper)
-2. **AI notes**: summary, key points and action items, plus optional study extras (see below) (Llama 3 on Groq, falling back to Groq's free `gpt-oss` models if your account can't use Llama)
+2. **AI notes**: summary, key points, key terms and action items, plus optional study extras (see below) (Llama 3 on Groq, falling back to Groq's free `gpt-oss` models if your account can't use Llama)
 3. A **Notion page** with the notes and transcript, either new or added to an existing page
 
 Everything runs on free tiers: Render (hosting), Groq (Whisper + Llama 3) and the Notion API.
@@ -182,14 +182,13 @@ The Notion page gets the lecture's title (the one at the top of the notes, which
 
 ### Study extras (optional)
 
-Above the Record/Upload tabs, **✨ Study extras** opens a list of extra things to make from each lecture. Each device remembers its choice:
+Every lecture gets a summary, key points, **key terms** and action items. Above the Record/Upload tabs, **✨ Study extras** opens a list of optional extras, none ticked by default. Each device remembers its choice:
 
-- **Practice questions**: exam-style questions, answers hidden until clicked (on by default)
-- **Key terms**: important terms with definitions (on by default)
+- **Explained simply**: the hardest ideas in plain language
+- **Practice questions**: exam-style questions, answers hidden until clicked
 - **Flashcards**: click to flip; **Copy for Quizlet / Anki** copies them in the format both apps import
 - **Multiple-choice quiz**: 4 options per question, the answer and explanation hidden
 - **Cheat sheet**: the must-know formulas, rules and facts
-- **Explained simply**: the hardest ideas in plain language
 
 They're made in one extra AI step after the notes, using only the ones you tick. All of them go to Notion too: questions and quiz answers as toggles, flashcards as a Front/Back table. If the AI is too busy to make them, the notes still arrive and a message says the extras were skipped.
 

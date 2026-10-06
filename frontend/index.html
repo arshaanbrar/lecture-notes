@@ -44,20 +44,18 @@
       <section class="card" id="input-card">
         <details class="extras" id="extras">
           <summary>✨ Study extras <span class="muted">(optional)</span> <span id="extras-summary" class="muted small"></span></summary>
-          <p class="muted small">Pick what to make from the lecture, on top of the summary and key points. Remembered for next time.</p>
+          <p class="muted small">Pick what to make from the lecture, on top of the summary, key points and key terms. Remembered for next time.</p>
           <div class="extras-grid">
-            <label><input type="checkbox" value="practice_questions" checked>
+            <label><input type="checkbox" value="explanations">
+              <span><strong>Explained simply</strong><small>The hardest ideas in plain language</small></span></label>
+            <label><input type="checkbox" value="practice_questions">
               <span><strong>Practice questions</strong><small>Exam-style questions, answers hidden</small></span></label>
-            <label><input type="checkbox" value="key_terms" checked>
-              <span><strong>Key terms</strong><small>Important terms with definitions</small></span></label>
             <label><input type="checkbox" value="flashcards">
               <span><strong>Flashcards</strong><small>Front/back cards, copy into Quizlet or Anki</small></span></label>
             <label><input type="checkbox" value="quiz">
               <span><strong>Multiple-choice quiz</strong><small>4 options each, answers hidden</small></span></label>
             <label><input type="checkbox" value="cheat_sheet">
               <span><strong>Cheat sheet</strong><small>Must-know formulas, rules and facts</small></span></label>
-            <label><input type="checkbox" value="explanations">
-              <span><strong>Explained simply</strong><small>The hardest ideas in plain language</small></span></label>
           </div>
         </details>
 
@@ -156,23 +154,23 @@
           <p id="note-summary"></p>
           <h3>Key points</h3>
           <ul id="note-points"></ul>
+          <div id="terms-block" hidden>
+            <h3>Key terms</h3>
+            <dl id="note-terms" class="terms"></dl>
+          </div>
           <h3>Action items</h3>
           <ul id="note-actions" class="checklist"></ul>
-          <div id="cheat-block" hidden>
-            <h3>Cheat sheet</h3>
-            <ul id="note-cheat"></ul>
-          </div>
           <div id="explained-block" hidden>
             <h3>Explained simply</h3>
             <dl id="note-explained" class="terms"></dl>
           </div>
+          <div id="cheat-block" hidden>
+            <h3>Cheat sheet</h3>
+            <ul id="note-cheat"></ul>
+          </div>
           <div id="questions-block" hidden>
             <h3>Practice questions</h3>
             <ol id="note-questions" class="questions"></ol>
-          </div>
-          <div id="terms-block" hidden>
-            <h3>Key terms</h3>
-            <dl id="note-terms" class="terms"></dl>
           </div>
           <div id="quiz-block" hidden>
             <h3>Quiz</h3>

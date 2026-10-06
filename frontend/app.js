@@ -352,7 +352,7 @@ window.addEventListener("beforeunload", (e) => {
 
 // ---------- optional study extras (chosen before recording) ----------
 
-const EXTRAS_KEY = "lecture-notes-extras";
+const EXTRAS_KEY = "lecture-notes-extras-v2"; // v2: nothing ticked by default
 const extrasBoxes = () => $$('#extras input[type="checkbox"]');
 
 function chosenExtras() {
@@ -683,15 +683,15 @@ function toMarkdown() {
   const { notes, transcript } = state.result;
   const lines = [`# ${$("#note-title").value}`, "", "## Summary", notes.summary || "—", "", "## Key points"];
   (notes.key_points.length ? notes.key_points : ["—"]).forEach((p) => lines.push(`- ${p}`));
+  if (notes.key_terms?.length) {
+    lines.push("", "## Key terms");
+    notes.key_terms.forEach((x) => lines.push(`- **${x.term}**: ${x.definition}`));
+  }
   lines.push("", "## Action items");
   (notes.action_items.length ? notes.action_items.map((a) => `- [ ] ${a}`) : ["None mentioned."]).forEach((a) => lines.push(a));
   if (notes.practice_questions?.length) {
     lines.push("", "## Practice questions");
     notes.practice_questions.forEach((x, i) => lines.push(`${i + 1}. ${x.q}`, `   - Answer: ${x.a}`));
-  }
-  if (notes.key_terms?.length) {
-    lines.push("", "## Key terms");
-    notes.key_terms.forEach((x) => lines.push(`- **${x.term}**: ${x.definition}`));
   }
   if (notes.cheat_sheet?.length) {
     lines.push("", "## Cheat sheet");

@@ -1,6 +1,6 @@
 """Turn a transcript (and optionally the lecture slides) into notes with an LLM on Groq.
 
-1. Notes: title, summary, key points, action items. Long transcripts are summarised in parts
+1. Notes: title, summary, key points, key terms, action items. Long transcripts are summarised in parts
    and then merged, so no single request goes over Groq's free-tier tokens-per-minute limit.
 2. Study extras the user picked (practice questions, flashcards, a quiz…), made in one extra
    request from the finished notes plus excerpts of the transcript.
@@ -26,6 +26,8 @@ SCHEMA = """Return a JSON object with exactly these keys:
 "title": a short title saying what the lecture was about, at most 8 words
 "summary": a 3-6 sentence summary of what was covered
 "key_points": an array of the most important points, each one clear sentence (aim for 5-12)
+"key_terms": an array of up to 12 objects {"term": "...", "definition": "..."} for the important terms, \
+concepts or formulas, each defined in one sentence as it was used. Use an empty array if there are none.
 "action_items": an array of concrete tasks, assignments, deadlines or follow-ups that were mentioned, \
 written as instructions and including who/when if stated. Use an empty array if there are none."""
 
@@ -33,8 +35,6 @@ written as instructions and including who/when if stated. Use an empty array if 
 EXTRAS = {
     "practice_questions": ('an array of 3-6 objects {"q": "...", "a": "..."}: exam-style questions that test '
                            "understanding of the most important ideas, each with a short correct answer", 8),
-    "key_terms": ('an array of up to 12 objects {"term": "...", "definition": "..."} for the important terms, '
-                  "concepts or formulas, each defined in one sentence as it was used", 15),
     "flashcards": ('an array of 8-15 objects {"front": "...", "back": "..."}: short flashcards for memorising '
                    "facts, definitions and formulas (front: a cue or question; back: a brief answer)", 20),
     "quiz": ('an array of 4-6 objects {"question": "...", "options": ["...", "...", "...", "..."], "answer": <index 0-3 '
@@ -64,7 +64,7 @@ PART_PROMPT = (
 MERGE_PROMPT = (
     "Below are notes written for consecutive parts of one recording, in order. Merge them into "
     "one set of notes for the whole recording: combine the summaries into one, and remove duplicate "
-    "key points and action items.\n\n{schema}\n\nPART NOTES (JSON):\n{text}"
+    "key points, key terms and action items.\n\n{schema}\n\nPART NOTES (JSON):\n{text}"
 )
 EXTRAS_PROMPT = (
     "Here are notes from a lecture and excerpts of its transcript. Make study material from them. "
@@ -179,6 +179,7 @@ def _clean(data: dict) -> dict:
         "title": str(data.get("title") or "Notes").strip()[:150],
         "summary": str(data.get("summary") or "").strip(),
         "key_points": _as_list(data.get("key_points")),
+        "key_terms": _pairs(data.get("key_terms"), "term", "definition", 15),
         "action_items": _as_list(data.get("action_items")),
     }
 
@@ -215,7 +216,6 @@ def _quiz(value, limit: int) -> list[dict]:
 def _clean_extras(data: dict, wanted: list[str]) -> dict:
     cleaners = {
         "practice_questions": lambda v, n: _pairs(v, "q", "a", n),
-        "key_terms": lambda v, n: _pairs(v, "term", "definition", n),
         "flashcards": lambda v, n: _pairs(v, "front", "back", n),
         "quiz": _quiz,
         "cheat_sheet": lambda v, n: _as_list(v)[:n],

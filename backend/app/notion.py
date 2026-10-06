@@ -322,14 +322,16 @@ def build_blocks(notes: dict, heading: str | None = None) -> list[dict]:
     points = notes.get("key_points") or []
     blocks += [_block("bulleted_list_item", p) for p in points] or [_block("paragraph", "—")]
 
+    terms = notes.get("key_terms") or []
+    if terms:
+        blocks.append(_block("heading_2", "Key terms"))
+        for item in terms:
+            blocks.append({"object": "block", "type": "bulleted_list_item",
+                           "bulleted_list_item": {"rich_text": _bold_then(item["term"], f" — {item['definition']}")}})
+
     blocks.append(_block("heading_2", "Action items"))
     actions = notes.get("action_items") or []
     blocks += [_block("to_do", a, checked=False) for a in actions] or [_block("paragraph", "None mentioned.")]
-
-    cheat = notes.get("cheat_sheet") or []
-    if cheat:
-        blocks.append(_block("heading_2", "Cheat sheet"))
-        blocks += [_block("bulleted_list_item", line) for line in cheat]
 
     explained = notes.get("explanations") or []
     if explained:
@@ -338,12 +340,10 @@ def build_blocks(notes: dict, heading: str | None = None) -> list[dict]:
             blocks.append(_block("paragraph", ""))
             blocks[-1]["paragraph"]["rich_text"] = _bold_then(item["topic"], f": {item['explanation']}")
 
-    terms = notes.get("key_terms") or []
-    if terms:
-        blocks.append(_block("heading_2", "Key terms"))
-        for item in terms:
-            blocks.append({"object": "block", "type": "bulleted_list_item",
-                           "bulleted_list_item": {"rich_text": _bold_then(item["term"], f" — {item['definition']}")}})
+    cheat = notes.get("cheat_sheet") or []
+    if cheat:
+        blocks.append(_block("heading_2", "Cheat sheet"))
+        blocks += [_block("bulleted_list_item", line) for line in cheat]
 
     questions = notes.get("practice_questions") or []
     if questions:
