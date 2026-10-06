@@ -448,7 +448,39 @@ function notionMode() {
 
 // Folder-style page browser: `path` is the list of page IDs from the top level down to
 // the page that's open. The open page is where notes get added.
-const tree = { loaded: false, nodes: new Map(), children: new Map(), path: [] };
+// `ordered` holds each opened page's sub-pages in the order they appear in Notion.
+const tree = { loaded: false, nodes: new Map(), children: new Map(), ordered: new Map(), loading: new Set(), path: [] };
+
+function kidsOf(id) {
+  const known = tree.children.get(id) || [];
+  if (id === null || !tree.ordered.has(id)) return known;
+  const ordered = tree.ordered.get(id);
+  const seen = new Set(ordered);
+  return [...ordered, ...known.filter((k) => !seen.has(k))].filter((k) => tree.nodes.has(k));
+}
+
+async function loadChildren(id, refresh = false) {
+  if (tree.loading.has(id)) return;
+  tree.loading.add(id);
+  try {
+    const kind = tree.nodes.get(id)?.type || "page";
+    const { children } = await api(`/api/notion/children/${id}?kind=${kind}${refresh ? "&refresh=true" : ""}`);
+    for (const child of children) {
+      const existing = tree.nodes.get(child.id);
+      tree.nodes.set(child.id, { ...child, icon: child.icon || existing?.icon || "", parent: id });
+      if (existing && existing.parent !== id) {
+        const old = tree.children.get(existing.parent);
+        if (old) tree.children.set(existing.parent, old.filter((k) => k !== child.id));
+      }
+    }
+    tree.ordered.set(id, children.map((c) => c.id));
+  } catch {
+    tree.ordered.set(id, []); // fall back to what search found (A–Z)
+  } finally {
+    tree.loading.delete(id);
+  }
+  if (tree.path[tree.path.length - 1] === id) renderTree();
+}
 
 function nodeLabel(node) {
   return `${node.icon || (node.type === "database" ? "🗂️" : "📄")} ${node.title}`;
@@ -491,7 +523,7 @@ function pageRow(node, subtitle) {
     sub.textContent = subtitle;
     btn.append(sub);
   }
-  if (tree.children.has(node.id)) {
+  if (node.type === "database" || kidsOf(node.id).length) {
     const arrow = document.createElement("span");
     arrow.className = "page-arrow";
     arrow.textContent = "›";
@@ -536,9 +568,14 @@ function renderTree() {
     tree.path.forEach((id) => crumbs.append(" › ", crumb(tree.nodes.get(id).title, id)));
 
     const current = tree.path[tree.path.length - 1] ?? null;
-    const kids = tree.children.get(current) || [];
+    if (current !== null && !tree.ordered.has(current)) {
+      loadChildren(current);
+      list.innerHTML = '<li class="muted page-empty">Loading…</li>';
+    }
+    const kids = kidsOf(current);
+    if (kids.length) list.replaceChildren();
     kids.forEach((id) => list.append(pageRow(tree.nodes.get(id))));
-    if (!kids.length) {
+    if (!kids.length && (current === null || tree.ordered.has(current))) {
       list.innerHTML = current
         ? '<li class="muted page-empty">No pages inside this one.</li>'
         : '<li class="muted page-empty">No pages found. Share pages with your integration in Notion.</li>';
@@ -577,6 +614,7 @@ async function loadTree(refresh = false) {
       tree.children.get(n.parent).push(n.id);
     });
     tree.children.forEach((ids) => ids.sort(byTitle));
+    tree.ordered = new Map(); // page orders are re-fetched as pages are opened
     tree.path = tree.path.filter((id) => tree.nodes.has(id));
     tree.loaded = true;
   } catch (err) {

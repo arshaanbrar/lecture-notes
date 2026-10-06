@@ -112,6 +112,14 @@ def notion_tree(refresh: bool = False):
     return {"nodes": notion.page_tree(refresh)}
 
 
+@api.get("/notion/children/{parent_id}")
+def notion_children(parent_id: str, kind: Literal["page", "database"] = "page", refresh: bool = False):
+    clean_id = notion.normalize_id(parent_id)
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="Invalid Notion page ID.")
+    return {"children": notion.children(clean_id, kind, refresh)}
+
+
 class Notes(BaseModel):
     summary: str = ""
     key_points: list[str] = []

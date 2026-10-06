@@ -103,6 +103,8 @@ def page_tree(refresh: bool = False) -> list[dict]:
     """Every page/database shared with the integration, each with its parent's ID (None = top level)."""
     if not refresh and _tree_cache["nodes"] is not None and time.time() - _tree_cache["at"] < TREE_TTL_SECONDS:
         return _tree_cache["nodes"]
+    if refresh:
+        _children_cache.clear()
 
     results, cursor = [], None
     for _ in range(MAX_SEARCH_REQUESTS):
@@ -135,6 +137,76 @@ def page_tree(refresh: bool = False) -> list[dict]:
 
     _tree_cache.update(at=time.time(), nodes=list(nodes.values()))
     return _tree_cache["nodes"]
+
+
+# ---------- ordered children (what's inside one page, in Notion's order) ----------
+
+# Blocks that can hold sub-pages inside them on a page (columns, toggles, callouts…).
+CONTAINER_BLOCKS = {"column_list", "column", "toggle", "callout", "quote", "synced_block",
+                    "heading_1", "heading_2", "heading_3", "bulleted_list_item", "numbered_list_item"}
+MAX_CONTAINER_DEPTH = 3
+MAX_BLOCK_REQUESTS = 40
+
+_children_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
+def _icon_lookup() -> dict[str, str]:
+    return {n["id"]: n["icon"] for n in (_tree_cache["nodes"] or [])}
+
+
+def _page_children(page_id: str) -> list[dict]:
+    icons = _icon_lookup()
+    found: list[dict] = []
+    budget = [MAX_BLOCK_REQUESTS]
+
+    def walk(block_id: str, depth: int) -> None:
+        cursor = None
+        while budget[0] > 0:
+            budget[0] -= 1
+            data = _request("GET", f"/blocks/{block_id}/children?page_size=100"
+                            + (f"&start_cursor={cursor}" if cursor else ""))
+            for block in data.get("results", []):
+                kind = block.get("type")
+                if kind == "child_page":
+                    found.append({"id": block["id"], "type": "page", "icon": icons.get(block["id"], ""),
+                                  "title": block["child_page"].get("title") or "Untitled"})
+                elif kind == "child_database":
+                    found.append({"id": block["id"], "type": "database", "icon": icons.get(block["id"], ""),
+                                  "title": block["child_database"].get("title") or "Untitled"})
+                elif kind in CONTAINER_BLOCKS and block.get("has_children") and depth < MAX_CONTAINER_DEPTH:
+                    walk(block["id"], depth + 1)
+            if not data.get("has_more"):
+                return
+            cursor = data.get("next_cursor")
+
+    walk(page_id, 0)
+    return found
+
+
+def _database_children(database_id: str) -> list[dict]:
+    found, cursor = [], None
+    for _ in range(5):  # up to 500 entries
+        body = {"page_size": 100, **({"start_cursor": cursor} if cursor else {})}
+        data = _request("POST", f"/databases/{database_id}/query", body)
+        for page in data.get("results", []):
+            icon = page.get("icon") or {}
+            found.append({"id": page["id"], "type": "page", "title": _title(page),
+                          "icon": icon.get("emoji", "") if icon.get("type") == "emoji" else ""})
+        if not data.get("has_more"):
+            break
+        cursor = data.get("next_cursor")
+    return found
+
+
+def children(parent_id: str, kind: str, refresh: bool = False) -> list[dict]:
+    """Pages/databases directly inside a page (in on-page order) or a database's entries."""
+    key = f"{kind}:{parent_id}"
+    cached = _children_cache.get(key)
+    if cached and not refresh and time.time() - cached[0] < TREE_TTL_SECONDS:
+        return cached[1]
+    items = _database_children(parent_id) if kind == "database" else _page_children(parent_id)
+    _children_cache[key] = (time.time(), items)
+    return items
 
 
 # ---------- block building ----------
@@ -191,6 +263,7 @@ def create_page(title: str, notes: dict, transcript: str, parent_id: str | None 
     })
     _append(page["id"], blocks[MAX_BLOCKS_PER_REQUEST:])
     _tree_cache["nodes"] = None  # so the new page shows up in the picker straight away
+    _children_cache.clear()
     return page.get("url", "")
 
 
