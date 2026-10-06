@@ -109,6 +109,7 @@ def page_tree(refresh: bool = False) -> list[dict]:
     if refresh:
         _children_cache.clear()
         _sources_cache.clear()
+        _sources_errors.clear()
 
     results, cursor = [], None
     for _ in range(MAX_SEARCH_REQUESTS):
@@ -213,6 +214,7 @@ def _page_children(page_id: str) -> list[dict]:
 GENERIC_TITLES = {"", "untitled", "untitled table", "untitled database", "new database", "new table"}
 
 _sources_cache: dict[str, list[dict]] = {}
+_sources_errors: dict[str, str] = {}
 
 
 def _is_generic_title(title: str) -> bool:
@@ -225,9 +227,15 @@ def _data_sources(database_id: str) -> list[dict]:
     if database_id not in _sources_cache:
         try:
             db = _request("GET", f"/databases/{database_id}", version=DATA_SOURCES_VERSION)
-            _sources_cache[database_id] = db.get("data_sources", [])
-        except AppError:
+            sources = list(db.get("data_sources", []))
+            # A linked view is often titled "View of <source table>".
+            title = "".join(t.get("plain_text", "") for t in db.get("title", [])).strip()
+            if title.lower().startswith("view of "):
+                sources.append({"id": "", "name": title[8:].strip()})
+            _sources_cache[database_id] = sources
+        except AppError as e:
             _sources_cache[database_id] = []
+            _sources_errors[database_id] = str(e)
     return _sources_cache[database_id]
 
 
@@ -254,21 +262,45 @@ def _query_pages(path: str, version: str) -> list[dict]:
     return found
 
 
+def _entries_from_search(table_names: set[str]) -> list[dict]:
+    """Entries of the shared table(s) with these names, from the search index. Used for linked
+    views (e.g. a "Courses" gallery showing the "Domains" table), which the API can't open."""
+    nodes = page_tree()
+    tables = {n["id"] for n in nodes if n["type"] == "database" and n["title"].strip().lower() in table_names}
+    return [{"id": n["id"], "type": "page", "title": n["title"], "icon": n["icon"]}
+            for n in nodes if n["type"] == "page" and n["parent"] in tables]
+
+
 def _database_children(database_id: str) -> list[dict]:
+    errors: list[str] = []
     sources = _data_sources(database_id)
-    if sources:
-        pages, seen = [], set()
-        for source in sources[:4]:
-            try:
-                for page in _query_pages(f"/data_sources/{source['id']}/query", DATA_SOURCES_VERSION):
-                    if page["id"] not in seen:
-                        seen.add(page["id"])
-                        pages.append(page)
-            except AppError:
-                continue
+    if database_id in _sources_errors:
+        errors.append(_sources_errors[database_id])
+    pages, seen = [], set()
+    for source in [s for s in sources if s.get("id")][:4]:
+        try:
+            for page in _query_pages(f"/data_sources/{source['id']}/query", DATA_SOURCES_VERSION):
+                if page["id"] not in seen:
+                    seen.add(page["id"])
+                    pages.append(page)
+        except AppError as e:
+            errors.append(str(e))
+    if pages:
+        return pages
+
+    names = {s.get("name", "").strip().lower() for s in sources} - {""}
+    if names:
+        pages = _entries_from_search(names)
         if pages:
             return pages
-    return _query_pages(f"/databases/{database_id}/query", VERSION)
+
+    try:
+        return _query_pages(f"/databases/{database_id}/query", VERSION)
+    except AppError as e:
+        errors.append(str(e))
+    if sources and not errors:
+        return []  # opened fine, just empty
+    raise AppError("Couldn't open this table. " + (errors[0] if errors else ""))
 
 
 def children(parent_id: str, kind: str, refresh: bool = False) -> list[dict]:
