@@ -185,11 +185,17 @@ async function startRecording() {
 
   // Back up every second of audio on this device, so a crash or closed tab doesn't lose it.
   hideRecoverCard();
+  showMissed(0);
   rec.backupOk = true;
   rec.backup = store.backupStart({ startedAt: rec.startedAt, mimeType: rec.mimeType }).catch(() => backupFailed(rec));
+  rec.chunkTimes = [];
+  rec.missed = 0;          // seconds of the lecture lost to interruptions
+  rec.pausedSince = null;  // when capturing stopped, if it has
+  watchForInterruptions(rec, [micStream, sysStream]);
   recorder.ondataavailable = (e) => {
     if (!e.data || !e.data.size) return;
     rec.chunks.push(e.data);
+    rec.chunkTimes.push(Date.now());
     if (!rec.backupOk) return;
     const seconds = (Date.now() - rec.startedAt) / 1000;
     rec.backup = rec.backup.then(() => rec.backupOk && store.backupChunk(e.data, seconds)).catch(() => backupFailed(rec));
@@ -245,9 +251,78 @@ function releaseScreen() {
   state.wakeLock = null;
 }
 
-// The wake lock is dropped when the tab is hidden; take it back when the user returns.
+// ----- noticing when a recording gets interrupted (phones pause it in the background) -----
+
+function watchForInterruptions(rec, streams) {
+  // iPhones suspend audio processing when the page is hidden or a call comes in.
+  rec.ctx.addEventListener("statechange", () => {
+    if (state.rec !== rec) return;
+    if (rec.ctx.state === "running") markResumed(rec);
+    else markPaused(rec);
+  });
+  for (const stream of streams) {
+    stream?.getAudioTracks().forEach((track) => {
+      track.addEventListener("mute", () => state.rec === rec && markPaused(rec));
+      track.addEventListener("unmute", () => state.rec === rec && markResumed(rec));
+    });
+  }
+}
+
+function markPaused(rec) {
+  if (rec.pausedSince === null) rec.pausedSince = Date.now();
+}
+
+function markResumed(rec) {
+  if (rec.pausedSince === null) return;
+  addMissed(rec, (Date.now() - rec.pausedSince) / 1000);
+  rec.pausedSince = null;
+}
+
+function addMissed(rec, seconds) {
+  if (seconds < 3) return; // ignore blips
+  rec.missed += seconds;
+  showMissed(rec.missed, true);
+}
+
+function showMissed(seconds, recording) {
+  const warning = $("#rec-warning");
+  warning.hidden = !seconds;
+  if (!seconds) return;
+  warning.textContent = recording
+    ? `⚠️ Recording was paused for ${fmtTime(seconds)} while this page was in the background, so that part is missing. Keep this page open on screen while recording.`
+    : `⚠️ This recording is missing about ${fmtTime(seconds)} from when the page was in the background.`;
+}
+
 document.addEventListener("visibilitychange", () => {
-  if (state.rec && document.visibilityState === "visible") keepScreenOn();
+  const rec = state.rec;
+  if (!rec) return;
+  if (document.visibilityState === "hidden") {
+    rec.hiddenAt = Date.now();
+    return;
+  }
+  // Back on the page: the wake lock was dropped, and the audio may need restarting.
+  keepScreenOn();
+  if (rec.ctx.state !== "running") rec.ctx.resume().catch(() => {});
+  if (rec.hiddenAt && rec.pausedSince === null) {
+    // No pause event fired, so check whether audio actually kept arriving while we were away.
+    const away = (Date.now() - rec.hiddenAt) / 1000;
+    const arrived = rec.chunkTimes.filter((t) => t > rec.hiddenAt).length; // ~1 chunk per second
+    if (away > 5 && arrived < away * 0.5) addMissed(rec, away - arrived);
+  }
+  rec.hiddenAt = null;
+});
+
+// ----- iPhone tip: website recording pauses in the background there -----
+
+// Only on iPhones/iPads (iPadOS reports itself as a Mac, but with a touch screen) — never on computers.
+const IOS = (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1))
+  && window.matchMedia("(pointer: coarse)").matches;
+const IOS_TIP_KEY = "lecture-notes-ios-tip-hidden";
+
+if (IOS && recall(IOS_TIP_KEY) !== "1") $("#ios-tip").hidden = false;
+$("#ios-tip-hide").addEventListener("click", () => {
+  $("#ios-tip").hidden = true;
+  remember(IOS_TIP_KEY, "1");
 });
 
 function stopRecording() {
@@ -256,6 +331,8 @@ function stopRecording() {
 }
 
 function finishRecording(rec) {
+  markResumed(rec);
+  showMissed(rec.missed, false);
   clearInterval(rec.timer);
   cancelAnimationFrame(rec.raf);
   stopStreams(rec.streams);
