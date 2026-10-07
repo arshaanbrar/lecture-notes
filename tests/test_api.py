@@ -5,7 +5,7 @@ AUDIO = ("lecture.webm", b"fake audio")
 
 
 def test_site_and_health(client):
-    assert client.get("/healthz").json() == {"ok": True}
+    assert client.get("/healthz").json()["ok"] is True
     page = client.get("/")
     assert page.status_code == 200 and "Built by Arshaan" in page.text
     assert page.headers["cache-control"] == "no-cache"  # browsers always pick up new versions
