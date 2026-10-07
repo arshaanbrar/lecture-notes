@@ -63,7 +63,7 @@ def test_unknown_job_is_a_clear_404(client):
 
 def test_send_to_notion_flow(client, fake_notion, fake_ai):
     people = client.get("/api/notion/people").json()["people"]
-    assert [p["title"] for p in people] == ["Arshaan", "Efrain"]  # Ryan is hidden
+    assert [p["title"] for p in people] == ["Arshaan", "Efrain", "Ryan"]
     guess = client.post("/api/notion/guess", json={"note_title": "Induction", "summary": "Discrete math"}).json()
     assert guess["person_id"] == H("arshaan")
     plan = client.post("/api/notion/plan", json={"person_id": guess["person_id"], "class_id": guess["class_id"],

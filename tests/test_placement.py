@@ -6,13 +6,13 @@ def names(people):
     return [p["title"] for p in people]
 
 
-def test_people_are_the_top_level_pages(fake_notion, monkeypatch):
-    monkeypatch.setattr(config, "HIDDEN_PEOPLE", set())
+def test_people_are_the_top_level_pages(fake_notion):
     assert names(placement.people()) == ["Arshaan", "Efrain", "Ryan"]
 
 
-def test_hidden_people_are_left_off_the_site(fake_notion):
-    # Ryan is hidden by default (HIDDEN_PEOPLE); nothing in his Notion is changed.
+def test_hidden_people_are_left_off_the_site(fake_notion, monkeypatch):
+    # HIDDEN_PEOPLE=Ryan leaves him off the site; nothing in his Notion is changed.
+    monkeypatch.setattr(config, "HIDDEN_PEOPLE", {"ryan"})
     assert names(placement.people()) == ["Arshaan", "Efrain"]
     assert fake_notion.created == [] and fake_notion.appended == []
 
