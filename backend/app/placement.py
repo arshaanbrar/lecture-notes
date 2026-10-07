@@ -14,8 +14,11 @@ from datetime import date
 from . import config, groq, notion
 from .utils import AppError
 
-# Tables whose entries are classes ("Courses", "Classes", or e.g. a template's "Domains").
+# Tables whose entries are classes ("Courses", "Classes", or e.g. a template's "Domains")...
 COURSE_TABLE = re.compile(r"course|class|subject|module|domain|unit|semester", re.I)
+# ...or, for a table nobody named, columns like these (e.g. Ryan's: Class code, Credits, Teacher, Grade).
+COURSE_COLUMNS = re.compile(r"class code|course code|credits?|teacher|professor|instructor|\bprof\b|"
+                            r"syllabus|\bgrade\b|current grade", re.I)
 # Pages/tables that hold lectures or class notes.
 LECTURE_WORDS = re.compile(r"\blec\b|\blecs?\s*\d|lecture|\bweek\s*\d|\btut|\blab\b|class notes|\bnotes?\b|topics?", re.I)
 # Tables and pages that mention classes but aren't where lecture notes belong.
@@ -96,8 +99,12 @@ def find_classes(person_id: str) -> list[dict]:
         name = table["title"]
         if notion.is_generic_title(name):
             name = notion.data_source_label(table["id"]) or name
-        if not COURSE_TABLE.search(name) or NOT_LECTURES.search(name):
+        if NOT_LECTURES.search(name):
             continue
+        if not COURSE_TABLE.search(name):
+            if not _has_course_columns(table["id"]):
+                continue
+            name = "Classes" if notion.is_generic_title(name) or name.lower().startswith("new database") else name
         for entry in notion.table_entries(table["id"])[:80]:
             key = notion.normalize_id(entry["id"])
             if key in seen or notion.is_generic_title(entry["title"]):
@@ -110,13 +117,18 @@ def find_classes(person_id: str) -> list[dict]:
     return found
 
 
+def _has_course_columns(table_id: str) -> bool:
+    info = notion.table_info(table_id)
+    return bool(info) and sum(bool(COURSE_COLUMNS.search(c)) for c in info.get("columns", [])) >= 2
+
+
 def forget_cached() -> None:
     _classes_cache.clear()
 
 
 def guess_owner(note_title: str, summary: str, usual_person_id: str = "") -> dict:
     """Guess whose lecture this is (and which class) by comparing what it's about with every
-    person's classes, or, for people without a class list, the titles of their lecture pages."""
+    person's classes, or, only for people without a class list, the titles of their lecture pages."""
     everyone = people()
     if not everyone or not (note_title or summary):
         return {"person_id": None}
@@ -126,13 +138,17 @@ def guess_owner(note_title: str, summary: str, usual_person_id: str = "") -> dic
     sections, class_index = [], []
     for p_num, person in enumerate(everyone):
         lines = [f"P{p_num}. {person['title']}"]
-        for c in find_classes(person["id"])[:40]:
+        their_classes = find_classes(person["id"])[:40]
+        for c in their_classes:
             lines.append(f"   C{len(class_index)}: {c['title']}")
             class_index.append((p_num, c))
-        lectures = [n["title"] for n in nodes if n["type"] == "page" and _is_lecture_page(by_id, n)
-                    and _inside(by_id, n, person["id"])][:12]
-        if lectures:
-            lines.append("   their lecture pages: " + "; ".join(lectures))
+        # Someone with a class list is matched on their classes (and the lecture's topic); the titles
+        # of their lecture pages ("csc lec 3"…) are only used for people without one.
+        if not their_classes:
+            lectures = [n["title"] for n in nodes if n["type"] == "page" and _is_lecture_page(by_id, n)
+                        and _inside(by_id, n, person["id"])][:12]
+            if lectures:
+                lines.append("   their lecture pages: " + "; ".join(lectures))
         if len(lines) == 1:
             lines.append("   (no classes or lecture pages found)")
         sections.append("\n".join(lines))

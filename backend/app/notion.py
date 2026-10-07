@@ -257,6 +257,7 @@ def table_info(table_id: str) -> dict | None:
                               if p.get("type") == "relation" and p["relation"].get("database_id")},
                 "kind": kind,
                 "date_prop": preferred[0] if preferred else None,
+                "columns": list(props),
             }
     except AppError:
         info = None

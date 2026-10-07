@@ -50,8 +50,10 @@ class FakeNotion:
             page("t2", "Review Lecture 7 — Discrete Math", D("topics"), linked_to("dm")),
             page("t3", "The Future of Work Week Three", D("topics"), linked_to("fow")),
             # Ryan: lectures are loose pages right on his page; UNI also has a Classes table.
-            page("r_uni", "UNI", P("ryan")), table("r_classes", "Classes", P("r_uni")),
-            page("r_csc", "CSC108", D("r_classes")),
+            # The Classes table has no name (it sits under a "Classes" heading); its columns give it away.
+            page("r_uni", "UNI", P("ryan")), table("r_classes", "", P("r_uni")),
+            page("r_csc", "CSC108", D("r_classes")), page("r_psy", "Pshycology", D("r_classes")),
+            page("r_mgm", "Intro to Management functions", D("r_classes")),
             page("r1", "csc lec 3", P("ryan")), page("r2", "csc lab 3", P("ryan")), page("r3", "mgm lec 4", P("ryan")),
             # Efrain: a plain Courses table (shown as a gallery), plus a timetable and other non-lecture tables.
             page("acad", "Academic", P("efrain")), table("ecourses", "Courses ", P("acad")),
@@ -69,7 +71,9 @@ class FakeNotion:
                           "type": {"type": "select", "select": {"options": [{"name": "Studying"}, {"name": "lecture"}]}},
                           "date": {"type": "date"}, "due date": {"type": "formula"}},
             H("ecourses"): {"Name": {"type": "title"}},
-            H("r_classes"): {"Name": {"type": "title"}},
+            H("r_classes"): {"Name": {"type": "title"}, "Class code": {"type": "select", "select": {"options": []}},
+                             "Credits": {"type": "number"}, "Teacher": {"type": "select", "select": {"options": []}},
+                             "Grade": {"type": "number"}},
             H("etimes"): {"Name": {"type": "title"}, "Location": {"type": "rich_text"}},
             H("eassess"): {"Name": {"type": "title"}},
         }

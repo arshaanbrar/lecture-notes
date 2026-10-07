@@ -76,6 +76,12 @@ def _waiting_message(job: Job) -> str:
     return f"Waiting for {files} to finish first" + (f" ({running.message})" if running else "")
 
 
+def busy() -> int:
+    """How many jobs are waiting or running (restarting the server would interrupt them)."""
+    with _lock:
+        return sum(j.status not in ("done", "error") for j in _jobs.values())
+
+
 def new_workdir() -> Path:
     return Path(tempfile.mkdtemp(prefix="notes-"))
 

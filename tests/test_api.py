@@ -101,3 +101,8 @@ def test_chat_during_a_recording(client, fake_ai, stub_audio):
 
 def test_chat_needs_a_question(client, fake_ai):
     assert client.post("/api/assistant/chat", json={"messages": []}).status_code == 400
+
+
+def test_health_check_says_how_busy_the_server_is(client):
+    data = client.get("/healthz").json()
+    assert data["ok"] is True and data["busy"] == 0

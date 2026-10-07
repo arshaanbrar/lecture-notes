@@ -21,7 +21,10 @@ def test_classes_come_from_course_tables(fake_notion, fake_ai):
     assert [c["title"] for c in placement.find_classes(H("arshaan"))] == [
         "The Future of Work", "Discrete Math for Computer Science"]
     assert [c["title"] for c in placement.find_classes(H("efrain"))] == ["SOCSCI 1T03"]
-    assert [c["title"] for c in placement.find_classes(H("ryan"))] == ["CSC108"]
+    # Ryan's table has no name, but its columns (Class code, Credits, Teacher…) show it's his classes.
+    ryan = placement.find_classes(H("ryan"))
+    assert [c["title"] for c in ryan] == ["CSC108", "Pshycology", "Intro to Management functions"]
+    assert {c["group"] for c in ryan} == {"Classes"}
 
 
 def test_guess_owner_matches_the_lecture_to_a_persons_class(fake_notion, fake_ai):
@@ -78,3 +81,17 @@ def test_lectures_kept_on_their_own_page_stay_there(fake_notion, fake_ai):
     assert best["kind"] == "page" and notion.same_id(best["target_id"], H("ryan"))
     assert best["label"] == "New page in Ryan, next to your other lectures"
     assert not any("Places it could be saved" in p for p in fake_ai.prompts)
+
+
+def test_people_with_a_class_list_are_guessed_from_their_classes(fake_notion, fake_ai):
+    placement.guess_owner("Motivation and leadership", "Management lecture on leading teams")
+    prompt = next(p for p in fake_ai.prompts if "These students share one Notion" in p)
+    ryan = prompt.split(". Ryan", 1)[1].split("\nP", 1)[0]
+    assert "Intro to Management functions" in ryan and "Pshycology" in ryan
+    assert "their lecture pages:" not in ryan and "csc lec 3" not in ryan
+
+
+def test_ryans_lectures_still_go_on_his_page_with_his_classes_known(fake_notion, fake_ai):
+    plan = placement.plan(H("ryan"), H("r_mgm"), "", "Motivation and leadership", "management")
+    best = plan["candidates"][plan["best"]]
+    assert best["kind"] == "page" and notion.same_id(best["target_id"], H("ryan"))

@@ -48,7 +48,8 @@ api = APIRouter(prefix="/api", dependencies=[Depends(require_password)])
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    # `busy`: notes being made right now, so an update can wait until nobody's mid-way.
+    return {"ok": True, "busy": jobs.busy()}
 
 
 @public.get("/config")
