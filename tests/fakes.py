@@ -49,8 +49,9 @@ class FakeNotion:
             page("t1", "Review Lecture 6 — Discrete Math", D("topics"), linked_to("dm")),
             page("t2", "Review Lecture 7 — Discrete Math", D("topics"), linked_to("dm")),
             page("t3", "The Future of Work Week Three", D("topics"), linked_to("fow")),
-            # Ryan: no class table, lectures are loose pages.
-            page("r_uni", "UNI", P("ryan")),
+            # Ryan: lectures are loose pages right on his page; UNI also has a Classes table.
+            page("r_uni", "UNI", P("ryan")), table("r_classes", "Classes", P("r_uni")),
+            page("r_csc", "CSC108", D("r_classes")),
             page("r1", "csc lec 3", P("ryan")), page("r2", "csc lab 3", P("ryan")), page("r3", "mgm lec 4", P("ryan")),
             # Efrain: a plain Courses table (shown as a gallery), plus a timetable and other non-lecture tables.
             page("acad", "Academic", P("efrain")), table("ecourses", "Courses ", P("acad")),
@@ -68,6 +69,7 @@ class FakeNotion:
                           "type": {"type": "select", "select": {"options": [{"name": "Studying"}, {"name": "lecture"}]}},
                           "date": {"type": "date"}, "due date": {"type": "formula"}},
             H("ecourses"): {"Name": {"type": "title"}},
+            H("r_classes"): {"Name": {"type": "title"}},
             H("etimes"): {"Name": {"type": "title"}, "Location": {"type": "rich_text"}},
             H("eassess"): {"Name": {"type": "title"}},
         }

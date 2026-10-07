@@ -257,6 +257,11 @@ def plan(person_id: str, class_id: str | None, class_text: str, note_title: str,
             continue
         same_class = [p for p in pages if _matches_class(p["title"], tokens)]
         score = 40 + 12 * len(same_class) + 2 * len(pages)
+        lectures_here = [p for p in pages if LECTURE_WORDS.search(p["title"])]
+        if notion.same_id(parent["id"], person_id) and len(lectures_here) >= 3:
+            # They keep their lectures right on their own page (e.g. Ryan's "csc lec 3", "mgm tut 1"…):
+            # that's their spot, as clear a choice as a lectures table linked to the class.
+            score = 100 + len(lectures_here)
         if parent["type"] == "database":
             info = notion.table_info(parent["id"])
             if not info:

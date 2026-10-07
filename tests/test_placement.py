@@ -21,7 +21,7 @@ def test_classes_come_from_course_tables(fake_notion, fake_ai):
     assert [c["title"] for c in placement.find_classes(H("arshaan"))] == [
         "The Future of Work", "Discrete Math for Computer Science"]
     assert [c["title"] for c in placement.find_classes(H("efrain"))] == ["SOCSCI 1T03"]
-    assert placement.find_classes(H("ryan")) == []
+    assert [c["title"] for c in placement.find_classes(H("ryan"))] == ["CSC108"]
 
 
 def test_guess_owner_matches_the_lecture_to_a_persons_class(fake_notion, fake_ai):
@@ -68,3 +68,13 @@ def test_timetables_are_not_classes_or_places_for_lectures(fake_notion, fake_ai)
     assert best["kind"] == "page" and notion.same_id(best["target_id"], H("soc"))
     for unwanted in ("etimes", "eassess"):
         assert not any(notion.same_id(c["target_id"], H(unwanted)) for c in plan["candidates"])
+
+
+def test_lectures_kept_on_their_own_page_stay_there(fake_notion, fake_ai):
+    # Ryan keeps "csc lec 3", "csc lab 3", "mgm lec 4" right on his page, even though UNI has a
+    # Classes table with a CSC108 card: new lectures go on his page too, without asking the AI.
+    plan = placement.plan(H("ryan"), H("r_csc"), "", "Recursion", "recursion")
+    best = plan["candidates"][plan["best"]]
+    assert best["kind"] == "page" and notion.same_id(best["target_id"], H("ryan"))
+    assert best["label"] == "New page in Ryan, next to your other lectures"
+    assert not any("Places it could be saved" in p for p in fake_ai.prompts)
