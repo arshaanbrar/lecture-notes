@@ -22,7 +22,9 @@ from . import config
 from .utils import AppError
 
 BASE = "https://api.groq.com/openai/v1"
-MAX_WAIT_SECONDS = 600      # longest a request waits for any model to have room
+MAX_WAIT_SECONDS = 600      # longest a background job waits for any model to have room
+PREFER_WAIT_SECONDS = 15    # wait this long for a better model rather than use a lesser one
+SERVER_TROUBLE_ROUNDS = 3   # if Groq itself isn't answering, try every model this many times
 NETWORK_TRIES = 3           # per model, for connection errors and Groq server errors
 UNAVAILABLE_SECONDS = 3600  # a model this key can't use is skipped for this long
 LISTING_SECONDS = 1800
@@ -32,6 +34,10 @@ Progress = Callable[[str], None]
 
 class ModelUnavailable(AppError):
     """The requested model is retired or not available to this Groq account."""
+
+
+class LimitsUsedUp(AppError):
+    """Every model is out of free allowance for longer than the caller is willing to wait."""
 
 
 @dataclass
@@ -159,13 +165,24 @@ def _short(model: str) -> str:
 
 
 def _call(path: str, models: list[str], build: Callable[[str], dict], progress: Progress, what: str,
-          need_tokens: int = 0) -> tuple[str, dict]:
-    """Send a request to the first model in `models` that has room; returns (model, reply)."""
-    deadline = time.time() + MAX_WAIT_SECONDS
+          need_tokens: int = 0, max_wait: float = MAX_WAIT_SECONDS) -> tuple[str, dict]:
+    """Send a request to the first model in `models` that has room; returns (model, reply).
+    `max_wait`: how long to wait if every model is out (short when someone is watching the screen)."""
+    deadline = time.time() + max_wait
     skipped: set[str] = set()   # failed for this request only (too large, rejected, server trouble)
+    no_answer: set[str] = set()  # ...of which: Groq itself didn't answer
     errors: list[str] = []
+    rounds = 0
     while True:
         candidates = [m for m in _usable(models) if m not in skipped]
+        if not candidates and skipped and skipped == no_answer and rounds < SERVER_TROUBLE_ROUNDS - 1:
+            # Groq's servers had trouble with every model: give them a moment, then try them all again.
+            rounds += 1
+            progress("Groq isn't answering right now; trying again shortly…")
+            time.sleep(10 * rounds)
+            skipped.clear()
+            no_answer.clear()
+            continue
         if not candidates:
             raise AppError("None of the Groq models could take this request ("
                            + ("; ".join(errors[-4:]) or "none are available to this key")
@@ -175,9 +192,14 @@ def _call(path: str, models: list[str], build: Callable[[str], dict], progress: 
         if not ready:  # every model is out of room for now
             soonest = max(0.0, min(_free_at(m, need_tokens) for m in candidates) - now)
             if now + soonest > deadline:
-                raise AppError(_used_up_message(candidates, soonest))
+                raise LimitsUsedUp(_used_up_message(candidates, soonest))
             progress(f"Groq's free limits are used up on every {what} model for now; waiting {int(soonest) + 1}s…")
             time.sleep(min(soonest, 30) + 0.5)
+            continue
+        best_wait = _free_at(candidates[0], need_tokens) - now
+        if ready[0] != candidates[0] and 0 < best_wait <= min(PREFER_WAIT_SECONDS, deadline - now):
+            # The best model is back in a few seconds (its per-minute allowance refills): worth the wait.
+            time.sleep(best_wait + 0.2)
             continue
 
         model = ready[0]  # the lists are in order of preference
@@ -185,6 +207,7 @@ def _call(path: str, models: list[str], build: Callable[[str], dict], progress: 
         resp = _send(path, build(model))
         if resp is None:  # network or Groq server trouble that didn't clear up
             skipped.add(model)
+            no_answer.add(model)
             errors.append(f"{_short(model)}: no answer")
             continue
         _note_headers(model, resp)
@@ -234,13 +257,14 @@ def _used_up_message(models: list[str], seconds: float) -> str:
 
 # ---------- public ----------
 
-def transcribe_file(path: Path, progress: Progress) -> str:
+def transcribe_file(path: Path, progress: Progress, max_wait: float = MAX_WAIT_SECONDS) -> str:
     def build(model: str) -> dict:
         return {
             "data": {"model": model, "response_format": "json", "temperature": "0"},
             "files": {"file": (path.name, path.read_bytes(), "audio/mpeg")},
         }
-    model, data = _call("/audio/transcriptions", config.GROQ_WHISPER_MODELS, build, progress, "transcription")
+    model, data = _call("/audio/transcriptions", config.GROQ_WHISPER_MODELS, build, progress, "transcription",
+                        max_wait=max_wait)
     _last_model["whisper"] = model
     return data.get("text", "").strip()
 
@@ -262,7 +286,7 @@ def _model_options(model: str, effort: str | None) -> dict:
 
 
 def _chat(messages: list[dict], progress: Progress, json_mode: bool, temperature: float, pool: str = "main",
-          effort: str | None = None) -> str:
+          effort: str | None = None, max_wait: float = MAX_WAIT_SECONDS) -> str:
     def build(model: str) -> dict:
         body = {"model": model, "messages": messages, "temperature": temperature, **_model_options(model, effort)}
         if json_mode:
@@ -271,23 +295,26 @@ def _chat(messages: list[dict], progress: Progress, json_mode: bool, temperature
 
     need = len(json.dumps(messages)) // 3 + 1500  # rough: the prompt's tokens plus room for the answer
     model, data = _call("/chat/completions", _pool(pool), build, progress,
-                        "quick-question" if pool == "fast" else "AI", need)
+                        "quick-question" if pool == "fast" else "AI", need, max_wait)
     _last_model[pool] = model
     content = data["choices"][0]["message"]["content"] or ""
     return re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()  # some models show their thinking
 
 
-def chat_json(system: str, user: str, progress: Progress, fast: bool = False, effort: str | None = None) -> str:
+def chat_json(system: str, user: str, progress: Progress, fast: bool = False, effort: str | None = None,
+              max_wait: float = MAX_WAIT_SECONDS) -> str:
     """Ask for a JSON reply. `fast` uses the quick models (their own limits, so the notes models' are
-    saved); `effort` asks reasoning models to think harder ("medium") on small but tricky questions."""
+    saved); `effort` asks reasoning models to think harder ("medium") on small but tricky questions;
+    `max_wait` is how long to wait if every model is out (keep it short when someone's watching)."""
     return _chat([{"role": "system", "content": system}, {"role": "user", "content": user}], progress, True, 0.2,
-                 "fast" if fast else "main", effort)
+                 "fast" if fast else "main", effort, max_wait)
 
 
-def chat_text(system: str, messages: list[dict], progress: Progress = lambda _: None, fast: bool = False) -> str:
+def chat_text(system: str, messages: list[dict], progress: Progress = lambda _: None, fast: bool = False,
+              max_wait: float = MAX_WAIT_SECONDS) -> str:
     """A normal conversational reply. `messages` alternate user/assistant turns."""
     return _chat([{"role": "system", "content": system}, *messages], progress, False, 0.4,
-                 "fast" if fast else "main")
+                 "fast" if fast else "main", None, max_wait)
 
 
 def last_model(pool: str) -> str:

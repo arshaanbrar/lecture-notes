@@ -47,3 +47,17 @@ def test_a_documents_text_is_labelled_full_text(fake_notion):
                        "aaaa031d4dec83b7afd701c73565cd05")
     toggle = fake_notion.appended[0][1][-1]
     assert toggle["heading_2"]["rich_text"][0]["text"]["content"] == "Full text (4 words)"
+
+
+def test_table_cells_become_short_text():
+    page = {"properties": {
+        "Name": {"type": "title", "title": [{"plain_text": "PSY101"}]},
+        "Days": {"type": "multi_select", "multi_select": [{"name": "Monday"}, {"name": "Wednesday"}]},
+        "Time": {"type": "rich_text", "rich_text": [{"plain_text": "9:30 - 10:30"}]},
+        "Next class": {"type": "formula", "formula": {"type": "date", "date": {"start": "2026-10-12"}}},
+        "Credits": {"type": "number", "number": 3},
+        "Empty": {"type": "select", "select": None},
+        "Class": {"type": "relation", "relation": [{"id": "abc"}]},
+    }}
+    assert notion._props_text(page) == "Days: Monday, Wednesday; Time: 9:30 - 10:30; Next class: 2026-10-12; Credits: 3"
+    assert notion._links(page) == ["abc"]

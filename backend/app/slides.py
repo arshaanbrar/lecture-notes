@@ -20,7 +20,7 @@ def extract_all(paths: list[Path], progress=lambda _: None, warn=lambda _: None)
         if len(paths) > 1:
             progress(f"Reading the slides… {name}")
         try:
-            text = extract_text(path, progress, ocr_pages=max(5, OCR_PAGES // len(paths)))
+            text = extract_text(path, progress, ocr_pages=max(1, OCR_PAGES // len(paths)))
         except AppError as e:
             warn(f"Couldn't read the slides “{name}”, so they were left out." if len(paths) > 1 else str(e))
             continue

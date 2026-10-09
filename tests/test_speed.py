@@ -64,7 +64,7 @@ def test_long_uploads_are_transcribed_a_few_pieces_at_a_time_in_order(monkeypatc
     monkeypatch.setattr(audio, "split", lambda *a: pieces)
     running, most = 0, 0
 
-    def fake_whisper(path, progress):
+    def fake_whisper(path, progress, max_wait=None):
         nonlocal running, most
         running += 1
         most = max(most, running)

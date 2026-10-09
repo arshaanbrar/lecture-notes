@@ -138,3 +138,32 @@ def test_a_model_with_room_is_used_even_when_the_clock_moves_between_checks(groq
     monkeypatch.setattr(groq.time, "time", ticking)
     groq.chat_json("s", "u", lambda _: None)
     assert models(sent) == ["big"]
+
+
+def test_someone_waiting_isnt_kept_waiting_when_everything_is_out(groq_replies):
+    queued, _ = groq_replies
+    for m in ("big", "kimi", "small"):
+        queued[m] = [limited("TPM", "40")]
+    with pytest.raises(groq.LimitsUsedUp, match="frees up in about 1 min"):
+        groq.chat_json("s", "u", lambda _: None, max_wait=0)
+
+
+def test_the_best_model_is_worth_a_few_seconds_wait(groq_replies, monkeypatch):
+    queued, sent = groq_replies
+    clock = [1000.0]
+    monkeypatch.setattr(groq.time, "time", lambda: clock[0])
+    monkeypatch.setattr(groq.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    queued["big"] = [limited("TPM", "5")]
+    groq.chat_json("s", "u", lambda _: None)  # big is back in 5s: wait for it rather than use kimi
+    assert models(sent) == ["big", "big"] and clock[0] >= 1005
+    queued["big"] = [limited("TPM", "50")]
+    groq.chat_json("s", "u", lambda _: None)  # 50s is too long to wait: kimi takes it
+    assert models(sent)[2:] == ["big", "kimi"]
+
+
+def test_when_groq_isnt_answering_it_tries_again_before_giving_up(groq_replies, monkeypatch):
+    _, sent = groq_replies
+    answers = iter([None] * 3 + [httpx.Response(200, json=OK)])
+    monkeypatch.setattr(groq, "_send", lambda path, kwargs: (sent.append(kwargs["json"]), next(answers))[1])
+    assert groq.chat_json("s", "u", lambda _: None) == "{}"
+    assert models(sent) == ["big", "kimi", "small", "big"]  # every model once, a pause, then again

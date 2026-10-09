@@ -15,24 +15,25 @@ PARALLEL_PIECES = 3
 _local_model = None
 
 
-def transcribe(path: Path, workdir: Path, progress: Progress) -> str:
+def transcribe(path: Path, workdir: Path, progress: Progress, max_wait: float = groq.MAX_WAIT_SECONDS) -> str:
+    """`max_wait`: how long to wait if Groq's free transcription limits are used up on every model."""
     if config.TRANSCRIBE_BACKEND == "local":
         return _local(path, progress)
     if config.TRANSCRIBE_BACKEND != "groq":
         raise AppError("TRANSCRIBE_BACKEND must be 'groq' or 'local'.")
-    return _groq(path, workdir, progress)
+    return _groq(path, workdir, progress, max_wait)
 
 
-def _groq(path: Path, workdir: Path, progress: Progress) -> str:
+def _groq(path: Path, workdir: Path, progress: Progress, max_wait: float) -> str:
     chunks = audio.split(path, workdir, GROQ_CHUNK_SECONDS)
     if len(chunks) == 1:
         progress("Transcribing…")
-        return groq.transcribe_file(chunks[0], progress)
+        return groq.transcribe_file(chunks[0], progress, max_wait)
     done = 0
 
     def one(chunk: Path) -> str:
         nonlocal done
-        text = groq.transcribe_file(chunk, progress)
+        text = groq.transcribe_file(chunk, progress, max_wait)
         done += 1
         progress(f"Transcribing… {done} of {len(chunks)} parts done")
         return text

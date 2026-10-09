@@ -159,6 +159,12 @@
         <label class="label" for="note-title">Title</label>
         <input id="note-title" class="title-input" maxlength="200">
 
+        <div id="notes-missing" class="notes-missing" hidden>
+          <p>The notes weren't made this time (usually Groq's free limits). The transcript is saved, so they
+            can be made without transcribing again.</p>
+          <button id="retry-notes" class="btn primary" type="button">✨ Make the notes now</button>
+        </div>
+
         <div id="notes-body">
           <h3>Summary</h3>
           <p id="note-summary"></p>

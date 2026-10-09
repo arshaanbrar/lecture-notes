@@ -26,6 +26,7 @@ NOT_LECTURES = re.compile(r"time\s*table|schedule|calend[ae]r|assess?ments?|\bex
                           r"\bgrades?\b|to.?dos?|\btasks?\b", re.I)
 STOP_WORDS = {"for", "and", "the", "with", "intro", "introduction", "applications", "to", "of", "in", "a", "an"}
 MAX_CANDIDATES = 6
+GUESS_MAX_WAIT = 20  # someone may be watching: if Groq's limits are out, skip the guess (they pick it)
 
 
 def _by_id(nodes: list[dict]) -> dict[str, dict]:
@@ -131,6 +132,21 @@ def forget_cached() -> None:
 
 
 TIMETABLE = re.compile(r"time\s*table|schedule", re.I)
+GUESS_PROMPT_CHARS = 14_000  # what the guess is told about everyone, at most (~4k tokens: limits are per token)
+
+
+def _fit(lines: list[str], budget: int) -> list[str]:
+    """Keep one person's lines within about `budget` characters: shorten long lines evenly first, then
+    leave off what comes last (the timetable's later slots, then the last classes)."""
+    cap = max(100, budget // max(1, len(lines)))
+    out, used = [], 0
+    for line in lines:
+        line = line if len(line) <= cap else line[:cap - 1] + "…"
+        if used + len(line) > budget and out:
+            break
+        out.append(line)
+        used += len(line) + 1
+    return out
 
 
 def _about_person(by_id: dict, nodes: list[dict], person: dict, class_start: int) -> tuple[list[str], list[dict]]:
@@ -190,6 +206,7 @@ def guess_owner(note_title: str, summary: str, usual_person_id: str = "", only_p
     sections, class_index = [], []
     for p_num, person in enumerate(everyone):
         lines, their_classes = _about_person(by_id, nodes, person, len(class_index))
+        lines = _fit(lines, GUESS_PROMPT_CHARS // len(everyone))
         class_index += [(p_num, c) for c in their_classes]
         sections.append("\n".join([f"P{p_num}. {person['title']}", *lines]))
 
@@ -200,7 +217,8 @@ def guess_owner(note_title: str, summary: str, usual_person_id: str = "", only_p
         "POLSC = political science, CSC = computer science, MGM = management), and to the topics of the "
         "recent lectures filed under it.",
         "If there's a timetable or class schedule and the recording time falls in (or right around) a "
-        "class's time slot on that day, that's strong evidence for that class.",
+        "class's time slot on that day, that's strong evidence for that class. A time marked uncertain (a "
+        "file's date) is only a weak hint; the subject matters more.",
         "If no listed class fits, give a short class name in class_name instead (e.g. a course code from "
         "their lecture pages like \"csc\").",
     ]
@@ -224,7 +242,7 @@ def guess_owner(note_title: str, summary: str, usual_person_id: str = "", only_p
     try:
         data = json.loads(groq.chat_json(
             "You figure out which student and class a lecture recording belongs to. Reply with JSON only.",
-            prompt, lambda _: None, effort="medium"))
+            prompt, lambda _: None, effort="medium", max_wait=GUESS_MAX_WAIT))
         p_num = 0 if known else int(str(data.get("person", "")).lstrip("Pp"))
     except (AppError, ValueError, TypeError, json.JSONDecodeError):
         return {"person_id": known[0]["id"] if known else None}
@@ -383,7 +401,7 @@ def _choose(ranked: list[dict], person: str, class_title: str, note_title: str, 
     try:
         data = json.loads(groq.chat_json(
             "You file lecture notes into the right place in a student's Notion. Reply with JSON only.",
-            prompt, lambda _: None, fast=True))
+            prompt, lambda _: None, fast=True, max_wait=GUESS_MAX_WAIT))
         choice = int(data.get("choice", 0))
         reason = str(data.get("reason") or "").strip()[:200]
     except (AppError, ValueError, TypeError, json.JSONDecodeError):

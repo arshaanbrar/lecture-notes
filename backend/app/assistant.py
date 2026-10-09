@@ -9,6 +9,8 @@ from .utils import AppError
 # characters is the last ~10 minutes of a lecture; after it, the notes carry most of what matters.
 TRANSCRIPT_CHARS = 9_000
 MAX_TURNS = 12  # earlier messages are dropped to keep each request small
+CHAT_MAX_WAIT = 45     # someone is waiting for the answer: don't sit for minutes if Groq's limits are out
+SNIPPET_MAX_WAIT = 90  # a piece of a live recording: if it can't be done now, the next piece picks it up
 
 SYSTEM = """You are a friendly study helper for a university student, available during and after a lecture.
 
@@ -58,7 +60,8 @@ def answer(messages: list[dict], context: dict) -> str:
         raise AppError("Type a question first.")
     system = SYSTEM.format(context=_lecture_context(context))
     # The quick models answer chat: they have their own free limits, so questions don't use up the notes'.
-    reply = groq.chat_text(system, [{"role": m["role"], "content": str(m["content"])[:4000]} for m in turns], fast=True)
+    reply = groq.chat_text(system, [{"role": m["role"], "content": str(m["content"])[:4000]} for m in turns],
+                           fast=True, max_wait=CHAT_MAX_WAIT)
     return reply or "Sorry, I couldn't come up with an answer. Try asking another way."
 
 
@@ -66,4 +69,4 @@ def transcribe_snippet(path: Path, workdir: Path, skip_seconds: float = 0) -> st
     """Transcribe the audio recorded since the last question, so the helper knows what was just said.
     `skip_seconds` drops the recording's first piece, which is resent only for its file header."""
     clean = audio.normalize(path, workdir, skip_seconds)
-    return transcribe.transcribe(clean, workdir, lambda _: None)
+    return transcribe.transcribe(clean, workdir, lambda _: None, max_wait=SNIPPET_MAX_WAIT)

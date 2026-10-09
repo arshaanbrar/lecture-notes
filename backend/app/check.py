@@ -38,7 +38,7 @@ def _groq_models() -> set[str]:
 def _try_model(fast: bool) -> tuple[bool, str]:
     """One tiny real request, to prove a model actually answers for this account."""
     try:
-        groq.chat_json("Reply with JSON only.", 'Reply with {"ok": true}', lambda _: None, fast=fast)
+        groq.chat_json("Reply with JSON only.", 'Reply with {"ok": true}', lambda _: None, fast=fast, max_wait=0)
         return True, groq.last_model("fast" if fast else "main") or "the configured model"
     except AppError as e:
         return False, str(e)

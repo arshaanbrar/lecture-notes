@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import assistant, audio, check, config, jobs, notion, placement, slides, summarize
+from . import assistant, audio, check, config, groq, jobs, notion, placement, slides, summarize
 from .utils import AppError
 
 logging.basicConfig(level=logging.INFO)
@@ -126,14 +126,14 @@ def _options(slides_paths: list[Path], extras: str, place: bool, usual_person_id
     lecture was recorded, in the user's own time (e.g. "Tuesday, October 7 at 11:47 AM")."""
     return jobs.Options(slides_paths=slides_paths, extras=_extras(extras), place=place,
                         usual_person_id=usual_person_id[:64], person_id=person_id[:64],
-                        recorded_at=recorded_at, source=source)
+                        recorded_at=recorded_at[:200], source=source)
 
 
 @api.post("/jobs/upload")
 async def upload(file: UploadFile = File(...), slides_file: UploadFile | None = File(None),
                     slides_files: list[UploadFile] = File([]),
                  extras: str = Form(""), place: bool = Form(True), usual_person_id: str = Form(""),
-                 person_id: str = Form(""), recorded_at: str = Form("", max_length=120)):
+                 person_id: str = Form(""), recorded_at: str = Form("")):
     workdir = jobs.new_workdir()
     try:
         suffix = Path(file.filename or "").suffix[:10] or ".bin"
@@ -152,7 +152,7 @@ async def from_url(url: str = Form(..., min_length=8, max_length=2000, pattern=r
                    slides_file: UploadFile | None = File(None),
                     slides_files: list[UploadFile] = File([]), extras: str = Form(""),
                    place: bool = Form(True), usual_person_id: str = Form(""),
-                 person_id: str = Form(""), recorded_at: str = Form("", max_length=120)):
+                 person_id: str = Form(""), recorded_at: str = Form("")):
     workdir = jobs.new_workdir()
     try:
         slides_paths = await _save_slides([slides_file, *slides_files], workdir)
@@ -167,7 +167,7 @@ async def from_text(transcript: str = Form(..., min_length=1, max_length=400_000
                     label: str = Form("Recording", max_length=200), slides_file: UploadFile | None = File(None),
                     slides_files: list[UploadFile] = File([]),
                     extras: str = Form(""), place: bool = Form(True), usual_person_id: str = Form(""),
-                 person_id: str = Form(""), recorded_at: str = Form("", max_length=120),
+                 person_id: str = Form(""), recorded_at: str = Form(""),
                     source: Literal["recording", "document"] = Form("recording"),
                     parts: str = Form("", max_length=500_000), parts_chars: int = Form(0, ge=0)):
     """Text the page already has: a recording it transcribed while it was being made, or a scanned
@@ -224,7 +224,7 @@ def notion_people(refresh: bool = False):
 class NoteContext(BaseModel):
     note_title: str = Field(default="", max_length=300)
     summary: str = Field(default="", max_length=5000)
-    recorded_at: str = Field(default="", max_length=120)  # when, in the user's time (matches timetables)
+    recorded_at: str = Field(default="", max_length=300)  # when, in the user's time (matches timetables)
 
 
 class GuessBody(NoteContext):
@@ -340,8 +340,12 @@ async def assistant_transcribe(audio_file: UploadFile = File(...), skip_seconds:
             text = assistant.transcribe_snippet(dest, workdir, skip_seconds)
         except audio.TooShort:
             text = ""  # too short or silent: nothing new to add
+        except groq.LimitsUsedUp as e:
+            # Out of free transcription for the moment: the page keeps this audio and sends it with the
+            # next piece, rather than switching to re-uploading the whole recording at the end.
+            raise HTTPException(status_code=429, detail=str(e))
         except AppError as e:
-            # Unreadable audio or Groq trouble: the page then transcribes the whole recording at the end.
+            # Unreadable audio: the page then transcribes the whole recording at the end.
             return {"text": "", "ok": False, "error": str(e)}
         return {"text": text, "ok": True}
     finally:

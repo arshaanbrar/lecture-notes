@@ -141,7 +141,7 @@ class FakeAI:
         self.prompts: list[str] = []
         self.fail_extras = False
 
-    def chat_json(self, system, prompt, progress, fast=False, effort=None):
+    def chat_json(self, system, prompt, progress, fast=False, effort=None, max_wait=None):
         self.prompts.append(prompt)
         if "which student" in system:
             lecture = prompt.split("\nP0.")[0].lower()  # the lecture's part, before the list of people
@@ -165,6 +165,6 @@ class FakeAI:
             raise AppError("busy")
         return json.dumps({**notes, **asked})
 
-    def chat_text(self, system, messages, progress=None, fast=False):
+    def chat_text(self, system, messages, progress=None, fast=False, max_wait=None):
         self.prompts.append(system)
         return f"Answer to: {messages[-1]['content']}"

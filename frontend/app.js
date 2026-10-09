@@ -633,6 +633,7 @@ $("#url-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   clearError();
   state.recordedAt = "";
+  state.earlyPlacement = null;
   startWorking("Sending link…");
   try {
     const form = new FormData();
@@ -699,7 +700,7 @@ async function processUpload(blob, filename, fromRecording) {
   state.earlyPlacement = null;
   state.recordedAt = fromRecording ? describeTime(state.blobStartedAt)
     : !isDocument(filename) && blob.lastModified
-      ? `${describeTime(blob.lastModified)} (when the file was saved, usually just after recording ended)` : "";
+      ? `file date ${describeTime(blob.lastModified)} (uncertain: may be when it was downloaded, not recorded)` : "";
   if (!fromRecording && await processScanOnDevice(blob, filename)) return;
   if (!fromRecording) ({ blob, filename } = await shrinkVideo(blob, filename));
   startWorking(isDocument(filename) ? "Uploading document…" : "Uploading…");
@@ -899,8 +900,9 @@ $("#copy-cards").addEventListener("click", async () => {
 
 function showResults(job) {
   const notes = job.notes || { title: job.label || "Notes", summary: "", key_points: [], action_items: [] };
-  state.result = { transcript: job.transcript, notes };
+  state.result = { transcript: job.transcript, notes, source: job.source || notes.source || "recording" };
   state.historyId = job.id;
+  $("#notes-missing").hidden = !!job.notes;
   $("#note-title").value = notes.title || "Notes";
   $("#note-summary").textContent = notes.summary || "—";
   fillList($("#note-points"), notes.key_points || [], "—");
@@ -1259,6 +1261,31 @@ $("#notion-send").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = "Send to Notion";
+  }
+});
+
+// Notes failed (e.g. Groq's limits) but the transcript is here: make them from it, no transcribing again.
+$("#retry-notes").addEventListener("click", async () => {
+  if (!state.result || state.busy) return;
+  const failedId = state.historyId;
+  clearError();
+  state.earlyPlacement = null;
+  startWorking("Making the notes…");
+  try {
+    const form = new FormData();
+    form.append("transcript", state.result.transcript);
+    form.append("label", $("#note-title").value.trim() || "Recording");
+    form.append("source", state.result.source === "document" ? "document" : "recording");
+    form.append("extras", chosenExtras().join(","));
+    appendWho(form);
+    const send = () => api("/api/jobs/text", { method: "POST", body: form });
+    await pollJob((await send()).id, send);
+    if (failedId && failedId !== state.historyId) {
+      store.historyDelete(failedId).then(renderHistory).catch(() => {}); // replaced by the new attempt
+    }
+  } catch (err) {
+    stopWorking();
+    showError(err.message);
   }
 });
 

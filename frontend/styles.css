@@ -341,3 +341,7 @@ body.locked .chat-fab, body.locked .chat-panel { display: none !important; }
 .tip { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: var(--accent-soft); font-size: 0.9rem; }
 .tip p { margin: 0 0 6px; }
 .site-footer a { color: inherit; }
+
+/* Notes that couldn't be made (e.g. Groq's limits): offer to make them from the saved transcript */
+.notes-missing { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--accent-soft); }
+.notes-missing p { margin: 0 0 10px; }

@@ -121,3 +121,15 @@ def test_when_the_device_knows_its_person_only_the_class_is_guessed(fake_notion,
 def test_the_device_person_is_kept_even_when_the_class_is_unclear(fake_notion, fake_ai):
     guess = placement.guess_owner("Team sync", "Budget planning", only_person_id=H("efrain"))
     assert guess["person_id"] == H("efrain") and not guess["class_id"]
+
+
+def test_the_guess_prompt_stays_small_however_much_people_have(fake_notion, fake_ai, monkeypatch):
+    monkeypatch.setattr(placement, "GUESS_PROMPT_CHARS", 1500)
+    for i in range(30):  # Efrain with lots of classes
+        fake_notion.search.append({"object": "page", "id": H(f"extra{i}"), "parent": {"type": "database_id", "database_id": H("ecourses")},
+                                   "icon": None, "properties": {"Name": {"type": "title", "title": [{"plain_text": f"COURSE {i} " + "x" * 200}]}}})
+    placement.guess_owner("Social theory", "Durkheim")
+    prompt = next(p for p in fake_ai.prompts if "These students share one Notion" in p)
+    people_part = prompt.split("Notion. Each one's classes (C…), timetable or lecture pages:\n", 1)[1].split("\n\n", 1)[0]
+    assert len(people_part) < 1500 + 300  # a fair share each, plus the names
+    assert "P0. Arshaan" in people_part and "P2. Ryan" in people_part  # nobody is left out

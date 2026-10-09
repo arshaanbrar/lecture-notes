@@ -96,6 +96,8 @@ def _value_text(p: dict) -> str:
         return str(value)
     if kind == "formula":
         inner = value.get(value.get("type", ""), None)
+        if isinstance(inner, dict):  # a date formula
+            return " to ".join(filter(None, [inner.get("start"), inner.get("end")]))
         return "" if inner in (None, "") else str(inner)
     return ""
 

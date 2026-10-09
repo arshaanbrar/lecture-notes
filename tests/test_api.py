@@ -128,3 +128,18 @@ def test_too_many_slide_files_are_refused(client):
     files = [("file", AUDIO)] + [("slides_files", (f"s{i}.pdf", b"x")) for i in range(11)]
     resp = client.post("/api/jobs/upload", files=files)
     assert resp.status_code == 400 and "at most 10" in resp.json()["detail"]
+
+
+def test_live_pieces_hit_by_groq_limits_are_retried_not_given_up(client, monkeypatch):
+    from backend.app import assistant, groq
+
+    def used_up(*a, **k):
+        raise groq.LimitsUsedUp("Groq's free limits are used up on every model for now")
+    monkeypatch.setattr(assistant, "transcribe_snippet", used_up)
+    resp = client.post("/api/assistant/transcribe", files={"audio_file": ("s.webm", b"x")})
+    assert resp.status_code == 429  # the page keeps the audio and sends it with the next piece
+
+
+def test_a_long_recording_time_never_makes_an_upload_fail(client, stub_audio, fake_ai):
+    job = client.post("/api/jobs/upload", files={"file": AUDIO}, data={"recorded_at": "x" * 500}).json()
+    assert wait_for_job(client, job["id"])["status"] == "done"

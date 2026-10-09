@@ -51,7 +51,7 @@ def fake_ai(monkeypatch):
 def stub_audio(monkeypatch):
     """Skip ffmpeg and Whisper: every upload 'transcribes' to the same short lecture."""
     monkeypatch.setattr(audio, "normalize", lambda src, workdir, skip_seconds=0: src)
-    monkeypatch.setattr(transcribe, "transcribe", lambda path, workdir, progress: "Today: proof by induction.")
+    monkeypatch.setattr(transcribe, "transcribe", lambda path, workdir, progress, **_: "Today: proof by induction.")
 
 
 @pytest.fixture
