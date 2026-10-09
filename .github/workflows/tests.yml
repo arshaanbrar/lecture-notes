@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # a stuck test fails the run instead of blocking deploys for hours
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -17,6 +18,6 @@ jobs:
       - name: Install OCR tools (read scanned PDFs and photos), as in the Dockerfile
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
       - run: pip install -r requirements.txt -r requirements-dev.txt
-      - run: python -m pytest -q
+      - run: python -m pytest -q -o faulthandler_timeout=60  # prints where any test hangs
       - name: Check the website's JavaScript for syntax errors
         run: for f in frontend/*.js; do node --check "$f"; done

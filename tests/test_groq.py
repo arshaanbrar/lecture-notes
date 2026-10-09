@@ -124,3 +124,17 @@ def test_quick_questions_use_the_quick_models_first(groq_replies):
     _, sent = groq_replies
     groq.chat_text("s", [{"role": "user", "content": "hi"}], fast=True)
     assert models(sent) == ["small"] and groq.last_model("fast") == "small"
+
+
+def test_a_model_with_room_is_used_even_when_the_clock_moves_between_checks(groq_replies, monkeypatch):
+    # Regression: the clock used to be read twice, so on a fast-ticking clock (Python 3.12 on Linux)
+    # a model with room looked free "a microsecond from now" and requests waited forever.
+    _, sent = groq_replies
+    ticks = [1000.0]
+
+    def ticking():
+        ticks[0] += 0.001
+        return ticks[0]
+    monkeypatch.setattr(groq.time, "time", ticking)
+    groq.chat_json("s", "u", lambda _: None)
+    assert models(sent) == ["big"]

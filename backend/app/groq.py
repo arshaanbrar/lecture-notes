@@ -145,10 +145,11 @@ def _usable(models: list[str]) -> list[str]:
 
 
 def _free_at(model: str, need_tokens: int) -> float:
-    """When this model can take a request needing about `need_tokens` (now, or later)."""
-    st, now = _model_state(model), time.time()
-    at = max(now, st.limited_until)
-    if st.tokens_left is not None and st.tokens_reset > now and st.tokens_left < need_tokens:
+    """When this model can take a request needing about `need_tokens`: a time in the past means now.
+    (It doesn't read the clock itself, so comparing it with one `now` is always consistent.)"""
+    st = _model_state(model)
+    at = st.limited_until
+    if st.tokens_left is not None and st.tokens_left < need_tokens:
         at = max(at, st.tokens_reset)
     return at
 
@@ -172,7 +173,7 @@ def _call(path: str, models: list[str], build: Callable[[str], dict], progress: 
         now = time.time()
         ready = [m for m in candidates if _free_at(m, need_tokens) <= now]
         if not ready:  # every model is out of room for now
-            soonest = min(_free_at(m, need_tokens) for m in candidates) - now
+            soonest = max(0.0, min(_free_at(m, need_tokens) for m in candidates) - now)
             if now + soonest > deadline:
                 raise AppError(_used_up_message(candidates, soonest))
             progress(f"Groq's free limits are used up on every {what} model for now; waiting {int(soonest) + 1}s…")
