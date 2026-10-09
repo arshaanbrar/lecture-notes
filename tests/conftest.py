@@ -26,7 +26,10 @@ def no_network(monkeypatch):
     def offline(*args, **kwargs):
         raise AppError("offline in tests")
     monkeypatch.setattr(notion, "_request", offline)
-    monkeypatch.setattr(groq, "_post", offline)
+    monkeypatch.setattr(groq, "_send", offline)
+    monkeypatch.setattr(groq, "_listed_models", lambda: None)
+    monkeypatch.setattr(groq, "_state", {})
+    monkeypatch.setattr(groq, "_last_model", {})
 
 
 @pytest.fixture

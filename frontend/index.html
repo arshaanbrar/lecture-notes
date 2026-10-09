@@ -99,12 +99,12 @@
             <button type="button" class="linkish small" id="ios-tip-hide">Got it, hide this</button>
           </div>
           <div class="slides-pick">
+            <ul class="slides-chosen" hidden></ul>
             <label class="slides-label">
-              <input type="file" class="slides-input" accept=".pdf,.pptx,application/pdf">
-              📎 Add lecture slides <span class="muted">(optional, helps make the notes more accurate)</span>
+              <input type="file" class="slides-input" accept=".pdf,.pptx,application/pdf" multiple>
+              <span class="slides-add">📎 Add lecture slides</span>
+              <span class="muted">(optional, one or more files; helps make the notes more accurate)</span>
             </label>
-            <span class="slides-chosen" hidden>📎 <span class="slides-name"></span>
-              <button type="button" class="linkish slides-remove">remove</button></span>
           </div>
 
           <div id="recording-ready" class="ready" hidden>
@@ -126,12 +126,12 @@
             <small class="muted" id="file-limit"></small>
           </label>
           <div class="slides-pick" id="upload-slides-pick">
+            <ul class="slides-chosen" hidden></ul>
             <label class="slides-label">
-              <input type="file" class="slides-input" accept=".pdf,.pptx,application/pdf">
-              📎 Add lecture slides <span class="muted">(optional, helps make the notes more accurate)</span>
+              <input type="file" class="slides-input" accept=".pdf,.pptx,application/pdf" multiple>
+              <span class="slides-add">📎 Add lecture slides</span>
+              <span class="muted">(optional, one or more files; helps make the notes more accurate)</span>
             </label>
-            <span class="slides-chosen" hidden>📎 <span class="slides-name"></span>
-              <button type="button" class="linkish slides-remove">remove</button></span>
           </div>
           <button id="file-process" class="btn primary" disabled>Transcribe &amp; write notes</button>
 

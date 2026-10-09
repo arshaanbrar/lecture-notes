@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import secrets
 import shutil
 from pathlib import Path
@@ -93,16 +94,25 @@ async def _save(upload: UploadFile, dest: Path, limit_mb: int, what: str) -> Non
         raise HTTPException(status_code=400, detail=f"The {what} is empty.")
 
 
-async def _save_slides(upload: UploadFile | None, workdir: Path) -> Path | None:
-    """Optional lecture slides (PDF or PowerPoint) that help the notes AI."""
-    if not upload or not upload.filename:
-        return None
-    suffix = Path(upload.filename).suffix.lower()
-    if suffix not in slides.SUFFIXES:
-        raise HTTPException(status_code=400, detail="Slides must be a PDF or PowerPoint (.pptx) file.")
-    dest = workdir / f"slides{suffix}"
-    await _save(upload, dest, SLIDES_MAX_MB, "slides file")
-    return dest
+MAX_SLIDE_FILES = 10
+
+
+async def _save_slides(uploads: list[UploadFile | None], workdir: Path) -> list[Path]:
+    """Optional lecture slides (PDFs or PowerPoints, one or more) that help the notes AI. Each is saved
+    under its own name, so the notes AI can tell the decks apart."""
+    uploads = [u for u in uploads if u is not None and u.filename]
+    if len(uploads) > MAX_SLIDE_FILES:
+        raise HTTPException(status_code=400, detail=f"Add at most {MAX_SLIDE_FILES} slide files.")
+    paths = []
+    for i, upload in enumerate(uploads, 1):
+        suffix = Path(upload.filename).suffix.lower()
+        if suffix not in slides.SUFFIXES:
+            raise HTTPException(status_code=400, detail="Slides must be PDF or PowerPoint (.pptx) files.")
+        name = re.sub(r"[^\w.\- ]+", "_", Path(upload.filename).stem)[:80] or "slides"
+        dest = workdir / f"slides_{i}_{name}{suffix}"
+        await _save(upload, dest, SLIDES_MAX_MB, f"slides file {upload.filename}")
+        paths.append(dest)
+    return paths
 
 
 def _extras(value: str) -> list[str]:
@@ -110,45 +120,54 @@ def _extras(value: str) -> list[str]:
     return [e for e in value.split(",") if e in summarize.EXTRAS]
 
 
-def _options(slides_path: Path | None, extras: str, place: bool, usual_person_id: str,
-             source: str = "recording") -> jobs.Options:
-    return jobs.Options(slides_path=slides_path, extras=_extras(extras), place=place,
-                        usual_person_id=usual_person_id[:64], source=source)
+def _options(slides_paths: list[Path], extras: str, place: bool, usual_person_id: str, person_id: str = "",
+             recorded_at: str = "", source: str = "recording") -> jobs.Options:
+    """`person_id`: who this device sends for (only the class is guessed then); `recorded_at`: when the
+    lecture was recorded, in the user's own time (e.g. "Tuesday, October 7 at 11:47 AM")."""
+    return jobs.Options(slides_paths=slides_paths, extras=_extras(extras), place=place,
+                        usual_person_id=usual_person_id[:64], person_id=person_id[:64],
+                        recorded_at=recorded_at, source=source)
 
 
 @api.post("/jobs/upload")
 async def upload(file: UploadFile = File(...), slides_file: UploadFile | None = File(None),
-                 extras: str = Form(""), place: bool = Form(True), usual_person_id: str = Form("")):
+                    slides_files: list[UploadFile] = File([]),
+                 extras: str = Form(""), place: bool = Form(True), usual_person_id: str = Form(""),
+                 person_id: str = Form(""), recorded_at: str = Form("", max_length=120)):
     workdir = jobs.new_workdir()
     try:
         suffix = Path(file.filename or "").suffix[:10] or ".bin"
         dest = workdir / f"input{suffix}"
         await _save(file, dest, config.MAX_UPLOAD_MB, "file")
-        slides_path = await _save_slides(slides_file, workdir)
+        slides_paths = await _save_slides([slides_file, *slides_files], workdir)
     except HTTPException:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
     return jobs.submit_file(dest, workdir, file.filename or "Recording",
-                            _options(slides_path, extras, place, usual_person_id)).public()
+                            _options(slides_paths, extras, place, usual_person_id, person_id, recorded_at)).public()
 
 
 @api.post("/jobs/url")
 async def from_url(url: str = Form(..., min_length=8, max_length=2000, pattern=r"^https?://"),
-                   slides_file: UploadFile | None = File(None), extras: str = Form(""),
-                   place: bool = Form(True), usual_person_id: str = Form("")):
+                   slides_file: UploadFile | None = File(None),
+                    slides_files: list[UploadFile] = File([]), extras: str = Form(""),
+                   place: bool = Form(True), usual_person_id: str = Form(""),
+                 person_id: str = Form(""), recorded_at: str = Form("", max_length=120)):
     workdir = jobs.new_workdir()
     try:
-        slides_path = await _save_slides(slides_file, workdir)
+        slides_paths = await _save_slides([slides_file, *slides_files], workdir)
     except HTTPException:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
-    return jobs.submit_url(url, workdir, _options(slides_path, extras, place, usual_person_id)).public()
+    return jobs.submit_url(url, workdir, _options(slides_paths, extras, place, usual_person_id, person_id, recorded_at)).public()
 
 
 @api.post("/jobs/text")
 async def from_text(transcript: str = Form(..., min_length=1, max_length=400_000),
                     label: str = Form("Recording", max_length=200), slides_file: UploadFile | None = File(None),
+                    slides_files: list[UploadFile] = File([]),
                     extras: str = Form(""), place: bool = Form(True), usual_person_id: str = Form(""),
+                 person_id: str = Form(""), recorded_at: str = Form("", max_length=120),
                     source: Literal["recording", "document"] = Form("recording"),
                     parts: str = Form("", max_length=500_000), parts_chars: int = Form(0, ge=0)):
     """Text the page already has: a recording it transcribed while it was being made, or a scanned
@@ -162,11 +181,11 @@ async def from_text(transcript: str = Form(..., min_length=1, max_length=400_000
         raise HTTPException(status_code=400, detail="Bad notes from the recording.")
     workdir = jobs.new_workdir()
     try:
-        slides_path = await _save_slides(slides_file, workdir)
+        slides_paths = await _save_slides([slides_file, *slides_files], workdir)
     except HTTPException:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
-    options = _options(slides_path, extras, place, usual_person_id, source)
+    options = _options(slides_paths, extras, place, usual_person_id, person_id, recorded_at, source)
     options.parts, options.parts_chars = done or None, parts_chars if done else 0
     return jobs.submit_text(transcript, workdir, label, options).public()
 
@@ -205,15 +224,18 @@ def notion_people(refresh: bool = False):
 class NoteContext(BaseModel):
     note_title: str = Field(default="", max_length=300)
     summary: str = Field(default="", max_length=5000)
+    recorded_at: str = Field(default="", max_length=120)  # when, in the user's time (matches timetables)
 
 
 class GuessBody(NoteContext):
     usual_person_id: str = Field(default="", max_length=64)
+    person_id: str = Field(default="", max_length=64)  # this device's person: then only the class is guessed
 
 
 @api.post("/notion/guess")
 def notion_guess(body: GuessBody):
-    return placement.guess_owner(body.note_title, body.summary, body.usual_person_id)
+    return placement.guess_owner(body.note_title, body.summary, body.usual_person_id,
+                                 only_person_id=body.person_id, recorded_at=body.recorded_at)
 
 
 class ClassesBody(NoteContext):
@@ -224,7 +246,7 @@ class ClassesBody(NoteContext):
 def notion_classes(body: ClassesBody):
     if not notion.normalize_id(body.person_id):
         raise HTTPException(status_code=400, detail="Pick a person first.")
-    return placement.classes(body.person_id, body.note_title, body.summary)
+    return placement.classes(body.person_id, body.note_title, body.summary, body.recorded_at)
 
 
 class PlanBody(NoteContext):

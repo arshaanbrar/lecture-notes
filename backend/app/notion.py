@@ -79,6 +79,40 @@ def _emoji(obj: dict) -> str:
     return icon.get("emoji", "") if icon.get("type") == "emoji" else ""
 
 
+def _value_text(p: dict) -> str:
+    """A table cell as short text (e.g. "Monday", "9:30 - 10:30", "PSY101"); "" for empty or unhelpful ones."""
+    kind, value = p.get("type"), p.get(p.get("type", ""), None)
+    if value in (None, "", []):
+        return ""
+    if kind == "rich_text":
+        return "".join(t.get("plain_text", "") for t in value).strip()
+    if kind in ("select", "status"):
+        return value.get("name", "")
+    if kind == "multi_select":
+        return ", ".join(o.get("name", "") for o in value)
+    if kind == "date":
+        return " to ".join(filter(None, [value.get("start"), value.get("end")]))
+    if kind == "number":
+        return str(value)
+    if kind == "formula":
+        inner = value.get(value.get("type", ""), None)
+        return "" if inner in (None, "") else str(inner)
+    return ""
+
+
+def _props_text(obj: dict, limit: int = 200) -> str:
+    """A page's table cells as "Days: Monday; Time: 9:30 - 10:30" (helps tell classes apart)."""
+    cells = [f"{name}: {text}" for name, p in (obj.get("properties") or {}).items()
+             if p.get("type") != "title" and (text := _value_text(p))]
+    return "; ".join(cells)[:limit]
+
+
+def _links(obj: dict) -> list[str]:
+    """IDs of the pages this one is linked to in relation columns (e.g. a lecture → its class)."""
+    return [r["id"] for p in (obj.get("properties") or {}).values() if p.get("type") == "relation"
+            for r in p.get("relation") or [] if r.get("id")]
+
+
 # ---------- everything shared with the integration ----------
 
 MAX_SEARCH_REQUESTS = 30  # 100 results each → up to 3000 pages/tables
@@ -140,6 +174,9 @@ def page_tree(refresh: bool = False) -> list[dict]:
             "icon": _emoji(obj),
             "parent": parent,
             "root": kind == "workspace",
+            "edited": obj.get("last_edited_time") or "",
+            "props": _props_text(obj) if obj["object"] == "page" else "",
+            "links": _links(obj) if obj["object"] == "page" else [],
         }
     # A page whose parent the integration can't see is treated as top level.
     for node in nodes.values():

@@ -92,10 +92,12 @@ def get(job_id: str) -> Job | None:
 
 @dataclass
 class Options:
-    slides_path: Path | None = None
+    slides_paths: list[Path] = field(default_factory=list)
     extras: list[str] = field(default_factory=list)
     place: bool = True          # also work out where in Notion it goes, alongside the notes
     usual_person_id: str = ""   # who this device usually sends notes for (breaks ties)
+    person_id: str = ""         # who this device sends for: then only the class is guessed
+    recorded_at: str = ""       # when it was recorded, in the user's time (matches timetables)
     source: str = "recording"   # for text sent by the page: "recording" (live transcript) or "document"
     parts: list[dict] | None = None  # notes the page had written during the recording...
     parts_chars: int = 0             # ...for this much of the transcript
@@ -137,7 +139,7 @@ def _start_placement(job: Job, text: str, options: Options) -> threading.Thread 
 
     def work():
         try:
-            job.placement = placement.prepare(text, options.usual_person_id)
+            job.placement = placement.prepare(text, options.usual_person_id, options.person_id, options.recorded_at)
         except Exception:  # only a head start: the page works it out itself if this fails
             log.warning("Placement for job %s failed", job.id, exc_info=True)
 
@@ -148,7 +150,7 @@ def _start_placement(job: Job, text: str, options: Options) -> threading.Thread 
 
 def _run(job: Job, workdir: Path, options: Options, path: Path | None, url: str | None, text: str | None) -> None:
     progress = lambda msg: job.update(message=msg)  # noqa: E731
-    slides_path, extras = options.slides_path, options.extras
+    slides_paths, extras = options.slides_paths, options.extras
 
     def warn(message: str) -> None:
         job.warning = " ".join(filter(None, [job.warning, message]))
@@ -177,12 +179,9 @@ def _run(job: Job, workdir: Path, options: Options, path: Path | None, url: str 
         placing = _start_placement(job, text, options)
 
         slides_text = ""
-        if slides_path:
+        if slides_paths:  # optional: any that can't be read are skipped with a warning
             job.update("summarizing", "Reading the slides…")
-            try:
-                slides_text = slides.extract_text(slides_path, progress)
-            except AppError as e:  # slides are optional: carry on without them
-                job.warning = str(e)
+            slides_text = slides.extract_all(slides_paths, progress, warn)
 
         job.update("summarizing", "Writing notes…")
         job.notes = summarize.make_notes(text, progress, slides_text, extras, warn, source=job.source,

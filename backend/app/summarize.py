@@ -14,6 +14,7 @@ import re
 
 from . import config, groq
 from .groq import Progress
+from .slides import DECK_SEPARATOR
 from .utils import AppError, split_text
 
 SYSTEM = (
@@ -48,14 +49,15 @@ EXTRAS = {
 }
 
 SLIDES_NOTE = (
-    "\n\nLECTURE SLIDES (extra context from the same lecture). The transcript is the main source; use the "
+    "\n\nLECTURE SLIDES (extra context from the same lecture; there may be more than one deck). The transcript "
+    "is the main source; use the "
     "slides to get names, terms, formulas and the structure right, and to fix words the transcript "
     "misheard. Don't add slide content that wasn't covered in the recording.\n{slides}"
 )
 SINGLE_SLIDES_CHARS = 8000
 MERGE_SLIDES_CHARS = 5000
 EXTRAS_SLIDES_CHARS = 5000
-EXTRAS_TRANSCRIPT_CHARS = 9000
+EXTRAS_TRANSCRIPT_CHARS = 7000  # the notes carry most of it; excerpts add detail
 
 DOCUMENT_NOTE = (
     "Note: the input below is the text of a document (e.g. a reading, handout or lecture notes), "
@@ -86,7 +88,12 @@ EXTRAS_PROMPT = (
 
 
 def _with_slides(prompt: str, slides: str, limit: int) -> str:
-    return prompt + SLIDES_NOTE.format(slides=slides[:limit]) if slides.strip() else prompt
+    """Add the slides to a prompt. With several decks, each gets an equal share of `limit`."""
+    if not slides.strip():
+        return prompt
+    decks = slides.split(DECK_SEPARATOR)
+    text = "\n\n".join(deck[:limit // len(decks)] for deck in decks)
+    return prompt + SLIDES_NOTE.format(slides=text)
 
 
 def part_notes(text: str, index: int, progress: Progress = lambda _: None) -> dict:

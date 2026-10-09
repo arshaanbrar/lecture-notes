@@ -106,3 +106,25 @@ def test_chat_needs_a_question(client, fake_ai):
 def test_health_check_says_how_busy_the_server_is(client):
     data = client.get("/healthz").json()
     assert data["ok"] is True and data["busy"] == 0
+
+
+def test_several_slide_decks_all_reach_the_notes(client, stub_audio, fake_ai, tmp_path):
+    from tests.test_slides import make_pdf
+    make_pdf(tmp_path / "a.pdf", "Strong induction")
+    make_pdf(tmp_path / "b.pdf", "Well ordering")
+    files = [("file", AUDIO),
+             ("slides_files", ("Week 3 - Induction.pdf", (tmp_path / "a.pdf").read_bytes())),
+             ("slides_files", ("Week 3 - Part 2.pdf", (tmp_path / "b.pdf").read_bytes())),
+             ("slides_files", ("broken.pdf", b"not a pdf"))]
+    job = wait_for_job(client, client.post("/api/jobs/upload", files=files).json()["id"])
+    assert job["status"] == "done", job["error"]
+    prompt = next(p for p in fake_ai.prompts if "LECTURE SLIDES" in p)
+    assert "[Slides: Week 3 - Induction.pdf]" in prompt and "Strong induction" in prompt
+    assert "[Slides: Week 3 - Part 2.pdf]" in prompt and "Well ordering" in prompt
+    assert "“broken.pdf”" in job["warning"] and "left out" in job["warning"]
+
+
+def test_too_many_slide_files_are_refused(client):
+    files = [("file", AUDIO)] + [("slides_files", (f"s{i}.pdf", b"x")) for i in range(11)]
+    resp = client.post("/api/jobs/upload", files=files)
+    assert resp.status_code == 400 and "at most 10" in resp.json()["detail"]

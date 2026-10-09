@@ -5,7 +5,9 @@ from pathlib import Path
 from . import audio, groq, transcribe
 from .utils import AppError
 
-TRANSCRIPT_CHARS = 14_000
+# Kept small: every question resends this, and Groq's free limits are counted in tokens. ~9,000
+# characters is the last ~10 minutes of a lecture; after it, the notes carry most of what matters.
+TRANSCRIPT_CHARS = 9_000
 MAX_TURNS = 12  # earlier messages are dropped to keep each request small
 
 SYSTEM = """You are a friendly study helper for a university student, available during and after a lecture.
@@ -55,7 +57,8 @@ def answer(messages: list[dict], context: dict) -> str:
     if not turns or turns[-1]["role"] != "user":
         raise AppError("Type a question first.")
     system = SYSTEM.format(context=_lecture_context(context))
-    reply = groq.chat_text(system, [{"role": m["role"], "content": str(m["content"])[:4000]} for m in turns])
+    # The quick models answer chat: they have their own free limits, so questions don't use up the notes'.
+    reply = groq.chat_text(system, [{"role": m["role"], "content": str(m["content"])[:4000]} for m in turns], fast=True)
     return reply or "Sorry, I couldn't come up with an answer. Try asking another way."
 
 

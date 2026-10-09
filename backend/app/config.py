@@ -18,20 +18,38 @@ def _env(name: str, default: str = "") -> str:
 
 # ⚠️ KEY — Groq API key (https://console.groq.com/keys). Used for transcription and notes.
 GROQ_API_KEY = _env("GROQ_API_KEY")
-# Models to try for notes, in order (comma-separated). The first one your Groq account can use is
-# kept, so a retired or paid-only model is skipped automatically.
-GROQ_MODELS = [m.strip() for m in _env(
-    "GROQ_MODEL",
-    "llama-3.3-70b-versatile,llama-3.1-8b-instant,openai/gpt-oss-120b,openai/gpt-oss-20b",
-).split(",") if m.strip()]
-# Small, fast models for quick questions (whose lecture is this, which class, where in Notion).
-# They have their own free-tier limits, so these don't use up the notes model's. Falls back to GROQ_MODEL.
-GROQ_FAST_MODELS = [m.strip() for m in _env(
-    "GROQ_FAST_MODEL", "openai/gpt-oss-20b,llama-3.1-8b-instant").split(",") if m.strip()]
+def _models(name: str, default: str) -> list[str]:
+    return [m.strip() for m in _env(name, default).split(",") if m.strip()]
+
+
+# Groq's free limits are per model, and everyone using the site shares one key. So each list below is
+# several models in order of preference: when one hits a free limit, the next one takes over (see
+# groq.py). Models this key can't use are skipped automatically. Comma-separated to override.
+# Notes, merges and study extras: the best models first.
+GROQ_MODELS = _models("GROQ_MODEL", ",".join([
+    "openai/gpt-oss-120b",
+    "moonshotai/kimi-k2-instruct-0905",
+    "moonshotai/kimi-k2-instruct",
+    "llama-3.3-70b-versatile",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "qwen/qwen3-32b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "openai/gpt-oss-20b",
+]))
+# Quick questions and the study helper chat: smaller models with their own limits, so they don't use
+# up the notes models' allowance. The notes models are tried after these.
+GROQ_FAST_MODELS = _models("GROQ_FAST_MODEL", ",".join([
+    "openai/gpt-oss-20b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "qwen/qwen3-32b",
+    "llama-3.1-8b-instant",
+]))
 # How hard gpt-oss models "think" before answering: low is faster and uses far fewer tokens,
 # and is plenty for notes. (Ignored by other models.)
 GROQ_REASONING_EFFORT = _env("GROQ_REASONING_EFFORT", "low")
-GROQ_WHISPER_MODEL = _env("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")
+# Transcription: both Whisper models have their own audio allowance (per hour and per day).
+GROQ_WHISPER_MODELS = _models("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo,whisper-large-v3")
+GROQ_WHISPER_MODEL = GROQ_WHISPER_MODELS[0] if GROQ_WHISPER_MODELS else "whisper-large-v3-turbo"
 
 # "groq" = open-source Whisper hosted free by Groq (fast, works on Render's free tier)
 # "local" = run Whisper on this server with faster-whisper (needs a real CPU + ~1 GB RAM)

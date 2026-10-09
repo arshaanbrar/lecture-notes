@@ -77,29 +77,6 @@ def test_long_uploads_are_transcribed_a_few_pieces_at_a_time_in_order(monkeypatc
     assert most == transcribe.PARALLEL_PIECES
 
 
-def test_gpt_oss_thinks_less_and_quick_questions_use_the_fast_model(monkeypatch):
-    sent = []
-
-    def fake_post(path, progress, make_kwargs):
-        body = make_kwargs()["json"]
-        sent.append(body)
-        if body["model"] == "unavailable-fast":
-            raise groq.ModelUnavailable("no access")
-        return {"choices": [{"message": {"content": "{}"}}]}
-    monkeypatch.setattr(groq, "_post", fake_post)
-    monkeypatch.setattr(groq, "_working", {})
-    monkeypatch.setattr(config, "GROQ_MODELS", ["openai/gpt-oss-120b"])
-    monkeypatch.setattr(config, "GROQ_FAST_MODELS", ["unavailable-fast", "openai/gpt-oss-20b"])
-
-    groq.chat_json("s", "u", lambda _: None, fast=True)
-    assert [b["model"] for b in sent] == ["unavailable-fast", "openai/gpt-oss-20b"]
-    assert sent[-1]["reasoning_effort"] == config.GROQ_REASONING_EFFORT == "low"
-    groq.chat_json("s", "u", lambda _: None)
-    assert sent[-1]["model"] == "openai/gpt-oss-120b"
-    groq.chat_json("s", "u", lambda _: None, fast=True)  # remembered: no retry of the unavailable one
-    assert sent[-1]["model"] == "openai/gpt-oss-20b" and len(sent) == 4
-
-
 def test_a_scan_read_on_the_device_is_summarised_as_a_document(client, fake_ai):
     job = client.post("/api/jobs/text", data={"transcript": "Soldiers and the state. " * 30, "label": "Messing.pdf",
                                               "source": "document", "place": "false"}).json()
@@ -159,3 +136,12 @@ def test_live_part_notes_route_and_text_job_with_parts(client, fake_ai):
     assert any(p.startswith("Below are notes written for consecutive parts") for p in fake_ai.prompts)
     bad = client.post("/api/jobs/text", data={"transcript": "x", "parts": "not json"})
     assert bad.status_code == 400
+
+
+def test_jobs_use_the_devices_person_and_the_recording_time(client, fake_notion, fake_ai):
+    data = {"transcript": "Today in management we cover motivation and leading teams. " * 10,
+            "person_id": H("ryan"), "recorded_at": "Tuesday, October 7 at 11:47 AM"}
+    job = wait_for_job(client, client.post("/api/jobs/text", data=data).json()["id"])
+    assert job["placement"]["person_id"] == H("ryan") and job["placement"]["class_id"] == H("r_mgm")
+    prompt = next(p for p in fake_ai.prompts if "which of their classes" in p.lower())
+    assert "Recorded: Tuesday, October 7 at 11:47 AM" in prompt

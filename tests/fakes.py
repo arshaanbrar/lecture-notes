@@ -30,6 +30,12 @@ def table(i, title, parent):
             "title": [{"plain_text": title}] if title else []}
 
 
+def cells(**values):
+    """Table cells in Notion's format: a list is a multi-select, text is a rich-text cell."""
+    return {name: {"type": "multi_select", "multi_select": [{"name": v} for v in value]} if isinstance(value, list)
+            else {"type": "rich_text", "rich_text": [{"plain_text": value}]} for name, value in values.items()}
+
+
 def linked_to(*ids):
     return {"domain": {"type": "relation", "relation": [{"id": H(x)} for x in ids]}}
 
@@ -57,9 +63,9 @@ class FakeNotion:
             page("r1", "csc lec 3", P("ryan")), page("r2", "csc lab 3", P("ryan")), page("r3", "mgm lec 4", P("ryan")),
             # Efrain: a plain Courses table (shown as a gallery), plus a timetable and other non-lecture tables.
             page("acad", "Academic", P("efrain")), table("ecourses", "Courses ", P("acad")),
-            page("soc", "SOCSCI 1T03", D("ecourses")),
+            page("soc", "SOCSCI 1T03", D("ecourses"), cells(Semester=["Fall"], Status="In progress")),
             table("etimes", "class timetable", P("acad")),
-            page("tt1", "SocSci 1T03 timetable", D("etimes")),
+            page("tt1", "SocSci 1T03 timetable", D("etimes"), cells(Days=["Monday"], Time="9:30 - 10:30")),
             page("tt2", "SocSci 1T03 TUTORIAL timetable", D("etimes")),
             table("eassess", "assesments", P("acad")), page("as1", "SOCSCI 1T03 essay notes", D("eassess")),
         ]
@@ -135,16 +141,17 @@ class FakeAI:
         self.prompts: list[str] = []
         self.fail_extras = False
 
-    def chat_json(self, system, prompt, progress, fast=False):
+    def chat_json(self, system, prompt, progress, fast=False, effort=None):
         self.prompts.append(prompt)
         if "which student" in system:
-            if "discrete" in prompt.split("These students")[0].lower():
-                person = re.search(r"^P(\d+)\. Arshaan", prompt, re.M).group(1)
-                cls = re.search(r"^   C(\d+): Discrete", prompt, re.M).group(1)
-                return json.dumps({"person": f"P{person}", "class": f"C{cls}", "confident": True})
+            lecture = prompt.split("\nP0.")[0].lower()  # the lecture's part, before the list of people
+            for subject, name, cls_start in (("discrete", "Arshaan", "Discrete"), ("management", "Ryan", "Intro to Management")):
+                person = re.search(rf"^P(\d+)\. {name}", prompt, re.M)
+                cls = re.search(rf"^   C(\d+): {cls_start}", prompt, re.M)
+                if subject in lecture and person and cls:
+                    return json.dumps({"person": f"P{person.group(1)}", "class": f"C{cls.group(1)}",
+                                       "confident": True, "reason": f"{subject} lecture"})
             return json.dumps({"person": None, "confident": False})
-        if "match lecture notes" in system:
-            return json.dumps({"index": -1, "confident": False})
         if "file lecture notes" in system:
             return json.dumps({"choice": 0, "reason": "That's where the other lectures are."})
         if "Here are notes from a lecture" in prompt:
@@ -158,6 +165,6 @@ class FakeAI:
             raise AppError("busy")
         return json.dumps({**notes, **asked})
 
-    def chat_text(self, system, messages, progress=None):
+    def chat_text(self, system, messages, progress=None, fast=False):
         self.prompts.append(system)
         return f"Answer to: {messages[-1]['content']}"

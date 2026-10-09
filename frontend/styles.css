@@ -248,7 +248,9 @@ body.locked #app { display: none; }
 .slides-label .muted { font-weight: 400; }
 .slides-label input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .slides-label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
-.slides-chosen { font-weight: 600; overflow-wrap: anywhere; }
+.slides-chosen { list-style: none; margin: 0 0 6px; padding: 0; font-weight: 600; overflow-wrap: anywhere; }
+.slides-chosen li { margin: 2px 0; }
+.slides-chosen .linkish { font-weight: 400; }
 #tab-upload .slides-pick { margin: 0 0 12px; }
 
 /* Practice questions & key terms */

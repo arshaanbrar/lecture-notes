@@ -466,7 +466,7 @@ async function processScanOnDevice(file, filename) {
     form.append("label", filename);
     form.append("source", "document");
     form.append("extras", chosenExtras().join(","));
-    form.append("usual_person_id", recall(WHO_KEY));
+    appendWho(form);
     const send = () => api("/api/jobs/text", { method: "POST", body: form });
     await pollJob((await send()).id, send);
   } catch (err) {
@@ -487,6 +487,7 @@ async function processLiveTranscript() {
   if (!transcript) return false;
   const placement = livePlacementFor(startedAt);
   const { parts, partsEnd } = await livePartsFor(startedAt);
+  state.recordedAt = describeTime(startedAt);
   try {
     const form = new FormData();
     form.append("transcript", transcript);
@@ -497,9 +498,9 @@ async function processLiveTranscript() {
     }
     form.append("label", "Recording");
     form.append("extras", chosenExtras().join(","));
-    form.append("usual_person_id", recall(WHO_KEY));
+    appendWho(form);
     form.append("place", placement ? "false" : "true"); // already worked out during the lecture
-    if (state.slides) form.append("slides_file", state.slides);
+    appendSlides(form);
     const send = () => api("/api/jobs/text", { method: "POST", body: form });
     const job = await send();
     state.fromRecording = true;
@@ -546,27 +547,57 @@ extrasBoxes().forEach((b) => b.addEventListener("change", () => {
 
 const SLIDES_MAX_MB = 50;
 
-function setSlides(file) {
-  if (file) {
+const SLIDES_MAX_FILES = 10;
+state.slides = []; // one or more decks for this lecture
+
+function addSlides(files) {
+  for (const file of files) {
     if (!/\.(pdf|pptx)$/i.test(file.name)) {
-      showError("Slides must be a PDF or PowerPoint (.pptx) file.");
-      file = null;
+      showError(`“${file.name}” isn't a PDF or PowerPoint (.pptx), so it wasn't added.`);
     } else if (file.size > SLIDES_MAX_MB * 1024 * 1024) {
-      showError(`The slides file is larger than ${SLIDES_MAX_MB} MB.`);
-      file = null;
+      showError(`“${file.name}” is larger than ${SLIDES_MAX_MB} MB, so it wasn't added.`);
+    } else if (state.slides.length >= SLIDES_MAX_FILES) {
+      showError(`You can add up to ${SLIDES_MAX_FILES} slide files.`);
+      break;
+    } else if (!state.slides.some((s) => s.name === file.name && s.size === file.size)) {
+      state.slides.push(file);
     }
   }
-  state.slides = file || null;
+  showSlides();
+}
+
+function clearSlides() {
+  state.slides = [];
+  showSlides();
+}
+
+// Both slide pickers (Record and Upload tabs) show the same list.
+function showSlides() {
   $$(".slides-pick").forEach((pick) => {
-    pick.querySelector(".slides-label").hidden = !!state.slides;
-    pick.querySelector(".slides-chosen").hidden = !state.slides;
-    pick.querySelector(".slides-name").textContent = state.slides ? state.slides.name : "";
+    const list = pick.querySelector(".slides-chosen");
+    list.replaceChildren(...state.slides.map((file, i) => {
+      const li = document.createElement("li");
+      const name = document.createElement("span");
+      name.textContent = `📎 ${file.name}`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "linkish";
+      remove.textContent = "remove";
+      remove.addEventListener("click", () => { state.slides.splice(i, 1); showSlides(); });
+      li.append(name, " ", remove);
+      return li;
+    }));
+    list.hidden = !state.slides.length;
+    pick.querySelector(".slides-add").textContent = state.slides.length ? "📎 Add more slides" : "📎 Add lecture slides";
     pick.querySelector(".slides-input").value = "";
   });
 }
 
-$$(".slides-input").forEach((input) => input.addEventListener("change", (e) => setSlides(e.target.files[0])));
-$$(".slides-remove").forEach((btn) => btn.addEventListener("click", () => setSlides(null)));
+function appendSlides(form) {
+  state.slides.forEach((file) => form.append("slides_files", file));
+}
+
+$$(".slides-input").forEach((input) => input.addEventListener("change", (e) => addSlides([...e.target.files])));
 
 // ---------- upload / link ----------
 
@@ -583,7 +614,7 @@ function setFile(file) {
   const doc = isDocument(file.name);
   $("#file-process").textContent = doc ? "Write notes from document" : "Transcribe & write notes";
   $("#upload-slides-pick").hidden = doc;
-  if (doc) setSlides(null);
+  if (doc) clearSlides();
   setBusy(state.busy);
 }
 
@@ -601,13 +632,14 @@ $("#file-process").addEventListener("click", () => state.file && processUpload(s
 $("#url-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   clearError();
+  state.recordedAt = "";
   startWorking("Sending link…");
   try {
     const form = new FormData();
     form.append("url", $("#url-input").value.trim());
     form.append("extras", chosenExtras().join(","));
-    form.append("usual_person_id", recall(WHO_KEY));
-    if (state.slides) form.append("slides_file", state.slides);
+    appendWho(form);
+    appendSlides(form);
     const send = () => api("/api/jobs/url", { method: "POST", body: form });
     await pollJob((await send()).id, send);
   } catch (err) {
@@ -638,8 +670,8 @@ function uploadWithProgress(blob, filename) {
     const form = new FormData();
     form.append("file", blob, filename);
     form.append("extras", chosenExtras().join(","));
-    form.append("usual_person_id", recall(WHO_KEY));
-    if (state.slides) form.append("slides_file", state.slides);
+    appendWho(form);
+    appendSlides(form);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/jobs/upload");
     Object.entries(authHeaders()).forEach(([k, v]) => xhr.setRequestHeader(k, v));
@@ -665,6 +697,9 @@ async function processUpload(blob, filename, fromRecording) {
   clearError();
   state.fromRecording = fromRecording;
   state.earlyPlacement = null;
+  state.recordedAt = fromRecording ? describeTime(state.blobStartedAt)
+    : !isDocument(filename) && blob.lastModified
+      ? `${describeTime(blob.lastModified)} (when the file was saved, usually just after recording ended)` : "";
   if (!fromRecording && await processScanOnDevice(blob, filename)) return;
   if (!fromRecording) ({ blob, filename } = await shrinkVideo(blob, filename));
   startWorking(isDocument(filename) ? "Uploading document…" : "Uploading…");
@@ -719,7 +754,7 @@ async function pollJob(id, resend) {
         state.earlyPlacement = null;
         showResults(job);
         saveToHistory(job);
-        setSlides(null); // slides belong to this lecture; don't reuse them for the next one
+        clearSlides(); // slides belong to this lecture; don't reuse them for the next one
       }
       if (job.warning) showError(job.warning);
       if (job.status === "error") {
@@ -947,6 +982,25 @@ $("#start-over").addEventListener("click", () => {
 // goes in that person's Notion → Send.
 
 const WHO_KEY = "lecture-notes-who";
+// The person this device sends notes for: saved when notes are sent to Notion. From then on the site
+// assumes this person (someone's phone is used for their own classes) and only guesses the class.
+const DEVICE_PERSON_KEY = "lecture-notes-device-person";
+
+function devicePerson() {
+  return recall(DEVICE_PERSON_KEY);
+}
+
+// "Tuesday, October 7 at 11:47 AM", in the user's own time (so it can be matched to timetables).
+function describeTime(ms) {
+  return new Date(ms).toLocaleString("en-US", { weekday: "long", month: "long", day: "numeric",
+                                                 hour: "numeric", minute: "2-digit" });
+}
+
+function appendWho(form) {
+  form.append("usual_person_id", recall(WHO_KEY));
+  form.append("person_id", devicePerson());
+  form.append("recorded_at", state.recordedAt || "");
+}
 const LAST_CLASS_KEY = "lecture-notes-last-class"; // { personId: classId }
 const OTHER = "__other";
 const sendState = { people: null, plan: null, planSeq: 0, classSeq: 0, guessSeq: 0 };
@@ -962,7 +1016,8 @@ function lastClasses() {
 }
 
 function noteContext() {
-  return { note_title: $("#note-title").value.trim(), summary: state.result?.notes?.summary || "" };
+  return { note_title: $("#note-title").value.trim(), summary: state.result?.notes?.summary || "",
+           recorded_at: state.recordedAt || "" };
 }
 
 function postJson(path, body) {
@@ -988,7 +1043,8 @@ async function guessOwner() {
   if (early) guess = early;
   else {
     try {
-      guess = await postJson("/api/notion/guess", { ...noteContext(), usual_person_id: recall(WHO_KEY) });
+      guess = await postJson("/api/notion/guess", { ...noteContext(), usual_person_id: recall(WHO_KEY),
+                                                    person_id: devicePerson() });
     } catch { /* fall back to the saved name */ }
   }
   if (seq !== sendState.guessSeq) return; // the user picked a name themselves meanwhile
@@ -996,8 +1052,11 @@ async function guessOwner() {
   const known = sendState.people?.some((p) => p.id === guess.person_id);
   if (known) {
     $("#who").value = guess.person_id;
-    hint.textContent = "🤖 Guessed from the lecture. Change it if that's wrong.";
-    await loadClasses({ preferClass: guess.class_id, preferText: guess.class_name });
+    const name = sendState.people.find((p) => p.id === guess.person_id).title;
+    hint.textContent = guess.person_id === devicePerson()
+      ? `📱 This device sends ${name}'s notes. Pick another name if this lecture is someone else's.`
+      : "🤖 Guessed from the lecture. Change it if that's wrong.";
+    await loadClasses({ preferClass: guess.class_id, preferText: guess.class_name, reason: guess.reason });
   } else {
     hint.textContent = "";
     await loadClasses();
@@ -1012,7 +1071,7 @@ async function loadPeople(refresh = false) {
     sendState.people = people;
     who.replaceChildren(new Option("Choose a name…", ""),
       ...people.map((p) => new Option(`${p.icon ? p.icon + " " : ""}${p.title}`, p.id)));
-    const saved = recall(WHO_KEY);
+    const saved = devicePerson() || recall(WHO_KEY);
     if (people.some((p) => p.id === saved)) who.value = saved;
   } catch (err) {
     who.replaceChildren(new Option("Couldn't load names", ""));
@@ -1062,7 +1121,8 @@ async function loadClasses(prefer = {}) {
   const last = lastClasses()[personId];
   if (prefer.preferClass && classes.some((c) => c.id === prefer.preferClass)) {
     select.value = prefer.preferClass;
-    hint.textContent = "🤖 Guessed from the lecture. Change it if that's wrong.";
+    hint.textContent = prefer.reason ? `🤖 Guessed: ${prefer.reason}. Change it if that's wrong.`
+      : "🤖 Guessed from the lecture. Change it if that's wrong.";
   } else if (prefer.preferText) {
     select.value = OTHER;
     $("#class-other").value = prefer.preferText;
@@ -1190,6 +1250,7 @@ $("#notion-send").addEventListener("click", async () => {
     a.rel = "noopener";
     a.textContent = "Open in Notion ↗";
     $("#notion-result").replaceChildren("✅ Saved to Notion. ", a);
+    remember(DEVICE_PERSON_KEY, $("#who").value); // next time, assume this person on this device
     if (state.historyId) {
       store.historyUpdate(state.historyId, { notion: { url, where: place.label } }).then(renderHistory).catch(() => {});
     }
@@ -1207,7 +1268,7 @@ async function saveToHistory(job) {
   const notes = state.result.notes;
   try {
     await store.historySave({ id: job.id, date: Date.now(), title: notes.title || job.label || "Notes",
-                              notes, transcript: job.transcript, notion: null });
+                              notes, transcript: job.transcript, notion: null, recordedAt: state.recordedAt || "" });
   } catch { /* storage blocked: no history, everything else still works */ }
   renderHistory();
 }
@@ -1233,6 +1294,7 @@ async function renderHistory() {
     open.addEventListener("click", () => {
       clearError();
       sendState.early = null;
+      state.recordedAt = item.recordedAt || "";
       showResults({ id: item.id, label: item.title, notes: item.notes, transcript: item.transcript });
     });
     const remove = document.createElement("button");

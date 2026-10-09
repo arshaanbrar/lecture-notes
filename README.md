@@ -20,7 +20,9 @@ You never edit code to add keys. All keys are environment variables:
 | `NOTION_TOKEN` | Notion integration secret (`ntn_…`) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | For Notion export |
 | `NOTION_PARENT_PAGE_ID` | A fallback page offered as a last-resort place for notes (paste its URL) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | Optional |
 | `HIDDEN_PEOPLE` | Names of people's top-level Notion pages to leave off the site, comma-separated, e.g. `Ryan, Alex` (default: nobody hidden). Their Notion isn't changed | — | Optional |
-| `GROQ_FAST_MODEL` | Small quick models for "whose lecture / which class / where", comma-separated, tried in order (default `openai/gpt-oss-20b,llama-3.1-8b-instant`). They have their own free-tier limits, so they don't eat into the notes model's | — | Optional |
+| `GROQ_MODEL` | Models for notes, comma-separated, best first. Each has its own free limits, and when one runs out the next takes over (see [Groq limits](#groq-limits)). The default list is usually right | — | Optional |
+| `GROQ_FAST_MODEL` | Models for the study helper chat and quick questions, comma-separated, tried first so they don't use up the notes models' limits | — | Optional |
+| `GROQ_WHISPER_MODEL` | Transcription models, comma-separated (default `whisper-large-v3-turbo,whisper-large-v3`, each with its own audio allowance) | — | Optional |
 | `GROQ_REASONING_EFFORT` | How much gpt-oss models "think" before answering: `low` (default) is faster and uses far fewer tokens | — | Optional |
 | `APP_PASSWORD` | Optional password that every visitor must enter | You make it up | Recommended |
 
@@ -163,6 +165,16 @@ To change a key later, go to your service → **Environment** → edit the value
 
 **Without a Blueprint:** **New +** → **Web Service** → pick the repo → Language **Docker** → Instance type **Free** → add the environment variables above → **Deploy**.
 
+### Groq limits
+
+Groq's free tier limits each **model** separately: tokens and requests per minute and per day for the AI, and audio per hour and per day for Whisper. Everyone using the site shares one key, so on a busy day one model runs out. The app handles this by itself:
+
+- **It spreads the work over several models.** When one hits a free limit, the next one in `GROQ_MODEL` takes over straight away instead of waiting. It remembers which models are out until they reset, and only waits when every model is out, telling you for how long. Transcription switches between two Whisper models the same way.
+- **It uses fewer tokens.** The study helper chat runs on its own smaller models and sends less of the transcript per question. Gpt-oss models are told to "think" less. Short lectures get their notes and extras in one call.
+- **`/check` shows which models are sharing the work** and which are out of allowance right now (and which limit: per minute or per day).
+
+If it's still not enough, for example everyone recording every day: Groq's pay-as-you-go plan (console.groq.com → Settings → Billing) has much higher limits and charges per use. Transcribing and summarising a lecture costs very little; check Groq's pricing page for current rates. You can also put more models in `GROQ_MODEL`: each one listed at https://console.groq.com/docs/models that your key can use adds its own free allowance.
+
 ### Free-tier things to know
 
 - **Kept awake for free.** Render stops free services after 15 minutes with no visitors, and the next visit then takes 30–60 seconds. The included GitHub Action (`.github/workflows/keep-awake.yml`) pings the site every 10 minutes so it stays awake. If you deploy under a different URL, change the URL in that file. GitHub pauses scheduled actions in repos with no activity for 60 days; re-enable it under the repo's **Actions** tab if that happens.
@@ -190,7 +202,16 @@ For system audio, the browser shows a share dialog. **Pick a tab, window or scre
 
 ### Sending to Notion
 
-While the lecture is recorded (or, for an upload, while the notes are written), the AI guesses **whose lecture it is and which class**: it compares what the lecture was about with everyone's classes (and, for people without a class list, the titles of their lecture pages). Both answers are pre-filled with a "🤖 Guessed from the lecture" note, and you can change either one. If two people take the same class, the name this device usually sends for breaks the tie.
+**Each device remembers its person.** After notes are sent to Notion, the device remembers that person ("📱 This device sends Ryan's notes"). From then on it assumes that person for every recording, since a phone is used for its owner's classes, and the AI only guesses the class. Pick another name to send one lecture for someone else; whoever was sent for last becomes the device's person.
+
+While the lecture is recorded (or, for an upload, while the notes are written), the AI guesses **which class** (and **whose lecture**, on a device that hasn't sent notes yet). It's given:
+- what the lecture is about;
+- each class's name and its details from Notion (course code, schedule, etc.);
+- the titles of the recent lectures filed under each class;
+- the person's timetable, if they have one (e.g. a "class timetable" table with days and times);
+- **when it was recorded**. A Tuesday 11:47 recording matches a class that's on Tuesdays at 11:30.
+
+The guess is pre-filled with its reason (e.g. "🤖 Guessed: matches the Tuesday 11:30 slot"), and you can change it. On a new device, if two people take the same class, the name the device last picked breaks the tie.
 
 The **Send to Notion** box asks two things:
 
@@ -229,7 +250,7 @@ It answers from the lecture first and says when it adds something the lecture di
 
 ### Lecture slides (optional)
 
-Under the recording, and on the Upload tab, there's **📎 Add lecture slides**. It's optional. If you add the prof's slides (PDF or PowerPoint `.pptx`, up to 50 MB), the AI uses them to get names, terms and formulas right and to fix words the transcript misheard. Skip it and everything works the same. Slides that are only images (no selectable text) can't be read; the notes are then made from the recording alone.
+Under the recording, and on the Upload tab, there's **📎 Add lecture slides**. It's optional. Add one or more of the prof's slide files (PDF or PowerPoint `.pptx`, up to 10 files of 50 MB each; pick several at once or add more later), and the AI uses them to get names, terms and formulas right and to fix words the transcript misheard. Skip it and everything works the same. Slides that are only images (no selectable text) can't be read; the notes are then made from the recording alone.
 
 ### Upload / link
 
@@ -271,7 +292,7 @@ Run it before a lecture if anything seems off.
 |---|---|
 | "No audio was shared" | In the share dialog, turn on **Share audio**. Choose a browser tab if the option isn't shown. |
 | System audio is silent | Make sure the shared tab is actually playing sound. The level bar should move. |
-| "Groq free-tier limit hit, waiting…" | Normal for long recordings. The app waits and retries automatically. |
+| "Groq's free limit reached for …; switching to another model" | Normal: the next model takes over. If it says limits are used up on **every** model, see [Groq limits](#groq-limits). `/check` shows which ones are out. |
 | Notion: "Could not find page…" | Share that page with your integration: **•••** → **Connections**. |
 | Notion page list is empty | Only pages shared with the integration appear. See Step 2C. |
 | "Couldn't reach the server" | The free server is waking up. Wait about a minute and refresh. |

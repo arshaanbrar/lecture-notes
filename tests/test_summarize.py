@@ -44,3 +44,10 @@ def test_bad_quiz_items_are_dropped():
         {"question": "bad answer", "options": ["a", "b", "c", "d"], "answer": 9},
     ]}, ["quiz"])
     assert [q["question"] for q in cleaned["quiz"]] == ["ok"]
+
+
+def test_each_deck_gets_a_share_of_the_room(fake_ai):
+    from backend.app.slides import DECK_SEPARATOR
+    decks = DECK_SEPARATOR.join(["[Slides: a.pdf]\n" + "A" * 20000, "[Slides: b.pdf]\n" + "B" * 20000])
+    summarize.make_notes("Induction.", lambda _: None, slides=decks)
+    assert "[Slides: a.pdf]" in fake_ai.prompts[0] and "[Slides: b.pdf]" in fake_ai.prompts[0]

@@ -11,11 +11,11 @@
 //    are ready, Send to Notion is too.
 // If anything goes wrong with this, the recording is simply uploaded and transcribed at the end
 // as before. The study helper chat (chat.js) uses the same transcript.
-// Relies on globals from app.js: state, api, postJson, recall, WHO_KEY, chosenExtras, $.
+// Relies on globals from app.js: state, api, postJson, recall, WHO_KEY, devicePerson, describeTime, chosenExtras, $.
 
 const LIVE_EVERY_MS = 3 * 60 * 1000;
 const GUESS_AFTER_WORDS = 250; // about two minutes of talking
-const MAX_GUESSES = 6;
+const MAX_GUESSES = 4; // each guess is an AI call; it stops sooner once two in a row agree
 
 const live = newLive(null);
 
@@ -137,7 +137,9 @@ async function liveGuess(rec) {
   live.guesses++;
   try {
     const about = liveExcerpt(live.transcript);
-    const guess = await postJson("/api/notion/guess", { note_title: "", summary: about, usual_person_id: recall(WHO_KEY) });
+    // This device's person is assumed (only the class is guessed); the time helps match a timetable.
+    const guess = await postJson("/api/notion/guess", { note_title: "", summary: about, usual_person_id: recall(WHO_KEY),
+                                                        person_id: devicePerson(), recorded_at: describeTime(rec.startedAt) });
     if (live.recId !== rec.startedAt || !guess.person_id) return;
     const key = `${guess.person_id}|${guess.class_id || guess.class_name || ""}`;
     const agrees = key === live.lastGuess;
@@ -148,7 +150,8 @@ async function liveGuess(rec) {
     // Two guesses in a row agree: work out where in Notion it goes, then stop asking.
     const planFor = { person_id: guess.person_id, class_id: guess.class_id || null,
                       class_text: guess.class_id ? "" : guess.class_name };
-    const plan = await postJson("/api/notion/plan", { ...planFor, note_title: "", summary: about });
+    const plan = await postJson("/api/notion/plan", { ...planFor, note_title: "", summary: about,
+                                                      recorded_at: describeTime(rec.startedAt) });
     if (live.recId !== rec.startedAt || live.lastGuess !== key) return;
     Object.assign(live.placement, { plan, plan_for: planFor });
     live.sure = true;

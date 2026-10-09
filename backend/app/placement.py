@@ -78,10 +78,14 @@ CLASSES_CACHE_SECONDS = 600
 _classes_cache: dict[str, tuple[float, list[dict]]] = {}
 
 
-def classes(person_id: str, note_title: str = "", summary: str = "") -> dict:
+def classes(person_id: str, note_title: str = "", summary: str = "", recorded_at: str = "") -> dict:
     """The classes in this person's Notion, plus the AI's guess at which one this lecture is for."""
     found = find_classes(person_id)
-    return {"classes": found, "guess": _guess_class(found, note_title, summary)}
+    guess = None
+    if found and (note_title or summary):
+        guessed = guess_owner(note_title, summary, only_person_id=person_id, recorded_at=recorded_at)
+        guess = guessed.get("class_id")
+    return {"classes": found, "guess": guess}
 
 
 def find_classes(person_id: str) -> list[dict]:
@@ -126,84 +130,122 @@ def forget_cached() -> None:
     _classes_cache.clear()
 
 
-def guess_owner(note_title: str, summary: str, usual_person_id: str = "") -> dict:
-    """Guess whose lecture this is (and which class) by comparing what it's about with every
-    person's classes, or, only for people without a class list, the titles of their lecture pages."""
+TIMETABLE = re.compile(r"time\s*table|schedule", re.I)
+
+
+def _about_person(by_id: dict, nodes: list[dict], person: dict, class_start: int) -> tuple[list[str], list[dict]]:
+    """What the AI is told about one person: their classes (with the class's details from Notion and
+    the titles of recent lectures filed under it), their timetable, and, only for people without a
+    class list, the titles of their lecture pages. Returns (lines, classes)."""
+    mine = [n for n in nodes if _inside(by_id, n, person["id"])]
+    their_classes = find_classes(person["id"])[:40]
+    lines = []
+    for i, c in enumerate(their_classes):
+        node = _node(by_id, c["id"]) or {}
+        tokens = _tokens(c["title"])
+        filed = [n for n in mine if n["type"] == "page" and not notion.same_id(n["id"], c["id"])
+                 and not _not_for_lectures(by_id, n)
+                 and (notion.same_id(n.get("parent"), c["id"])
+                      or any(notion.same_id(link, c["id"]) for link in n.get("links", []))
+                      or (tokens and _matches_class(n["title"], tokens) and LECTURE_WORDS.search(n["title"])))]
+        filed.sort(key=lambda n: n.get("edited") or "", reverse=True)
+        recent = [f"“{n['title']}”" for n in filed[:3] if not notion.is_generic_title(n["title"])]
+        line = f"   C{class_start + i}: {c['title']}"
+        if node.get("props"):
+            line += f" [{node['props']}]"
+        if recent:
+            line += " (recent lectures: " + ", ".join(recent) + ")"
+        lines.append(line)
+
+    tables = {notion.normalize_id(n["id"]) for n in mine if n["type"] == "database" and TIMETABLE.search(n["title"])}
+    slots = [f"{n['title']} ({n['props']})" if n.get("props") else n["title"]
+             for n in mine if n["type"] == "page" and notion.normalize_id(n.get("parent") or "") in tables]
+    if slots:
+        lines.append("   their timetable: " + "; ".join(slots[:20]))
+    if not their_classes:
+        lectures = [n["title"] for n in mine if n["type"] == "page" and _is_lecture_page(by_id, n)][:12]
+        if lectures:
+            lines.append("   their lecture pages (no class list): " + "; ".join(lectures))
+    if not lines:
+        lines.append("   (no classes or lecture pages found)")
+    return lines, their_classes
+
+
+def guess_owner(note_title: str, summary: str, usual_person_id: str = "", only_person_id: str = "",
+                recorded_at: str = "") -> dict:
+    """Guess whose lecture this is and which class, by matching what it's about (and when it was
+    recorded) to each person's classes, their recent lectures and their timetable.
+
+    `only_person_id`: the person is already known (this device sends for them), so only the class is
+    guessed. Returns {"person_id", "person_name", "class_id", "class_name", "class_title", "reason"}."""
     everyone = people()
+    known = [p for p in everyone if only_person_id and notion.same_id(p["id"], only_person_id)]
+    if known:
+        everyone = known
     if not everyone or not (note_title or summary):
-        return {"person_id": None}
+        return {"person_id": known[0]["id"] if known else None}
     nodes = notion.page_tree()
     by_id = _by_id(nodes)
 
     sections, class_index = [], []
     for p_num, person in enumerate(everyone):
-        lines = [f"P{p_num}. {person['title']}"]
-        their_classes = find_classes(person["id"])[:40]
-        for c in their_classes:
-            lines.append(f"   C{len(class_index)}: {c['title']}")
-            class_index.append((p_num, c))
-        # Someone with a class list is matched on their classes (and the lecture's topic); the titles
-        # of their lecture pages ("csc lec 3"…) are only used for people without one.
-        if not their_classes:
-            lectures = [n["title"] for n in nodes if n["type"] == "page" and _is_lecture_page(by_id, n)
-                        and _inside(by_id, n, person["id"])][:12]
-            if lectures:
-                lines.append("   their lecture pages: " + "; ".join(lectures))
-        if len(lines) == 1:
-            lines.append("   (no classes or lecture pages found)")
-        sections.append("\n".join(lines))
+        lines, their_classes = _about_person(by_id, nodes, person, len(class_index))
+        class_index += [(p_num, c) for c in their_classes]
+        sections.append("\n".join([f"P{p_num}. {person['title']}", *lines]))
 
     usual = next((f"P{i}. {p['title']}" for i, p in enumerate(everyone)
                   if notion.same_id(p["id"], usual_person_id)), "")
+    rules = [
+        "Match the lecture's subject to each class's name or course code (e.g. SOCSCI = social science, "
+        "POLSC = political science, CSC = computer science, MGM = management), and to the topics of the "
+        "recent lectures filed under it.",
+        "If there's a timetable or class schedule and the recording time falls in (or right around) a "
+        "class's time slot on that day, that's strong evidence for that class.",
+        "If no listed class fits, give a short class name in class_name instead (e.g. a course code from "
+        "their lecture pages like \"csc\").",
+    ]
+    if known:
+        intro = f"This lecture is {known[0]['title']}'s. Their classes (C…) and timetable:"
+        question = "Which of their classes is it for?"
+    else:
+        intro = "These students share one Notion. Each one's classes (C…), timetable or lecture pages:"
+        question = "Whose lecture is this most likely, and for which class?"
+        if usual:
+            rules.append(f"This device usually sends notes for {usual}. Use that only to break a tie when more "
+                         "than one person has a matching class.")
     prompt = (
-        f"Lecture title: {note_title}\nLecture summary: {summary[:1500]}\n\n"
-        "These students share one Notion. Each has classes (C…) and/or lecture pages:\n"
-        + "\n".join(sections) + "\n\n"
-        + (f"This device usually sends notes for {usual}. Use that only to break a tie when more than "
-           "one person has a matching class.\n" if usual else "")
-        + "Whose lecture is this most likely, and for which class? Match the subject of the lecture to "
-        "class names and course codes, and to the topics of their existing lecture pages. If the best "
-        "person has no listed class that fits, give a short class name in class_name instead (e.g. a "
-        "course code from their lecture pages like \"csc\").\n"
+        f"Lecture title: {note_title or '(not known yet)'}\nWhat it's about: {summary[:1500]}\n"
+        + (f"Recorded: {recorded_at}\n" if recorded_at else "")
+        + f"\n{intro}\n" + "\n".join(sections) + "\n\n"
+        + f"{question}\n" + "\n".join(f"- {r}" for r in rules) + "\n"
         'Reply as JSON: {"person": "P<number>", "class": "C<number>" or null, "class_name": "<text>" or null, '
-        '"confident": true|false}'
+        '"confident": true|false, "reason": "<a few words, e.g. matches the Tuesday 11:30 slot>"}'
     )
     try:
         data = json.loads(groq.chat_json(
             "You figure out which student and class a lecture recording belongs to. Reply with JSON only.",
-            prompt, lambda _: None, fast=True))
-        p_num = int(str(data.get("person", "")).lstrip("Pp"))
+            prompt, lambda _: None, effort="medium"))
+        p_num = 0 if known else int(str(data.get("person", "")).lstrip("Pp"))
     except (AppError, ValueError, TypeError, json.JSONDecodeError):
-        return {"person_id": None}
-    if not 0 <= p_num < len(everyone) or data.get("confident") is False:
+        return {"person_id": known[0]["id"] if known else None}
+    if not 0 <= p_num < len(everyone):
+        return {"person_id": known[0]["id"] if known else None}
+    person = everyone[p_num]
+    unsure = data.get("confident") is False
+    if unsure and not known:
         return {"person_id": None}
 
     class_id, class_title = None, ""
     try:
         c_num = int(str(data.get("class") or "").lstrip("Cc"))
-        if 0 <= c_num < len(class_index) and class_index[c_num][0] == p_num:
+        if 0 <= c_num < len(class_index) and class_index[c_num][0] == p_num and not unsure:
             class_id, class_title = class_index[c_num][1]["id"], class_index[c_num][1]["title"]
     except ValueError:
         pass
-    class_name = "" if class_id else str(data.get("class_name") or "").strip()[:80]
-    return {"person_id": everyone[p_num]["id"], "person_name": everyone[p_num]["title"],
-            "class_id": class_id, "class_name": class_name, "class_title": class_title or class_name}
-
-
-def _guess_class(found: list[dict], note_title: str, summary: str) -> str | None:
-    if not found or not (note_title or summary):
-        return None
-    listing = "\n".join(f"{i}. {c['title']}" for i, c in enumerate(found))
-    prompt = (f"Lecture title: {note_title}\nLecture summary: {summary[:1500]}\n\nThe student's classes:\n{listing}\n\n"
-              'Which class is this lecture most likely from? Reply as JSON: {"index": <number>, '
-              '"confident": true|false}. Use -1 if none of them fits.')
-    try:
-        data = json.loads(groq.chat_json(
-            "You match lecture notes to the student's class. Reply with JSON only.", prompt, lambda _: None, fast=True))
-        index = int(data.get("index", -1))
-    except (AppError, ValueError, TypeError, json.JSONDecodeError):
-        return None
-    return found[index]["id"] if 0 <= index < len(found) and data.get("confident", True) else None
+    class_name = "" if class_id or unsure else str(data.get("class_name") or "").strip()[:80]
+    return {"person_id": person["id"], "person_name": person["title"], "class_id": class_id,
+            "class_name": class_name, "class_title": class_title or class_name,
+            "reason": "" if unsure else str(data.get("reason") or "").strip()[:120]}
 
 
 def _is_lecture_page(by_id: dict, node: dict) -> bool:
@@ -372,11 +414,12 @@ def excerpt(transcript: str, limit: int = 1500) -> str:
     return transcript[:head] + " … " + transcript[-(limit - head):]
 
 
-def prepare(transcript: str, usual_person_id: str = "") -> dict | None:
-    """Guess whose lecture it is and which class, and plan where it goes, from the transcript alone.
-    Returns {"person_id", "class_id", "class_name", "plan", "plan_for"} or None if it can't tell."""
+def prepare(transcript: str, usual_person_id: str = "", person_id: str = "", recorded_at: str = "") -> dict | None:
+    """Guess whose lecture it is (unless `person_id` already says) and which class, and plan where it
+    goes, from the transcript alone. Returns {"person_id", "class_id", "class_name", "plan",
+    "plan_for", …} or None if it can't tell."""
     about = excerpt(transcript)
-    guess = guess_owner("", about, usual_person_id)
+    guess = guess_owner("", about, usual_person_id, only_person_id=person_id, recorded_at=recorded_at)
     if not guess.get("person_id"):
         return None
     result = {**guess, "plan": None}

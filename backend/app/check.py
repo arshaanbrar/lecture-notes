@@ -39,9 +39,20 @@ def _try_model(fast: bool) -> tuple[bool, str]:
     """One tiny real request, to prove a model actually answers for this account."""
     try:
         groq.chat_json("Reply with JSON only.", 'Reply with {"ok": true}', lambda _: None, fast=fast)
-        return True, groq._working.get("fast" if fast else "main") or "the configured model"
+        return True, groq.last_model("fast" if fast else "main") or "the configured model"
     except AppError as e:
         return False, str(e)
+
+
+def _groq_limits(listed: set[str]) -> dict:
+    """Which models share the work, and any that are out of free allowance right now."""
+    rows = [r for r in groq.status() if r["model"] in listed]
+    usable = {r["model"] for r in rows if r["state"] == "ready"}
+    out = [f"{r['model'].split('/')[-1]}: {r['state']}" for r in rows if r["state"] != "ready"]
+    notes = [m.split("/")[-1] for m in config.GROQ_MODELS if m in usable]
+    detail = (f"{len(notes)} notes models share the free limits ({', '.join(notes) or 'none'})."
+              + (" Out for now: " + "; ".join(dict.fromkeys(out)) + "." if out else " None are out of allowance."))
+    return _item("Groq free limits", bool(notes), detail)
 
 
 def run() -> list[dict]:
@@ -57,12 +68,13 @@ def run() -> list[dict]:
             ok, detail = _try_model(fast=False)
             items.append(_item("AI for notes", ok, f"Answering with {detail}." if ok else detail))
             ok, detail = _try_model(fast=True)
-            items.append(_item("Quick AI (who / which class / where)", ok,
+            items.append(_item("Quick AI (chat helper, quick questions)", ok,
                                f"Answering with {detail}." if ok else detail, required=False))
-            whisper = config.GROQ_WHISPER_MODEL
-            items.append(_item("Transcription (Whisper)", whisper in models,
-                               f"{whisper} is available." if whisper in models
-                               else f"{whisper} isn't available to this key. Set GROQ_WHISPER_MODEL."))
+            whisper = [m for m in config.GROQ_WHISPER_MODELS if m in models]
+            items.append(_item("Transcription (Whisper)", bool(whisper),
+                               f"Available: {', '.join(whisper)}." if whisper
+                               else "None of GROQ_WHISPER_MODEL is available to this key."))
+            items.append(_groq_limits(models))
         except (AppError, httpx.HTTPError) as e:
             items.append(_item("Groq key", False, f"Couldn't reach Groq: {e}"))
 
