@@ -29,6 +29,7 @@ def _models(name: str, default: str) -> list[str]:
 # Notes, merges and study extras: the best models first.
 GROQ_MODELS = _models("GROQ_MODEL", ",".join([
     "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
     "moonshotai/kimi-k2-instruct-0905",
     "moonshotai/kimi-k2-instruct",
     "llama-3.3-70b-versatile",
@@ -41,6 +42,7 @@ GROQ_MODELS = _models("GROQ_MODEL", ",".join([
 # up the notes models' allowance. The notes models are tried after these.
 GROQ_FAST_MODELS = _models("GROQ_FAST_MODEL", ",".join([
     "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "qwen/qwen3-32b",
     "llama-3.1-8b-instant",
