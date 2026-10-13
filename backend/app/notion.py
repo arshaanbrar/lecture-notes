@@ -286,9 +286,15 @@ def page_contents(page_id: str, limit: int = 300) -> tuple[str, int]:
         blocks, more = _children(key)
         texts = [t for t in map(_block_text, blocks) if t]
         if len(" ".join(texts)) < 60:
-            sub = next((b for b in blocks if b.get("type") == "child_page"), None)
-            if sub:
-                texts += [t for t in map(_block_text, _children(sub["id"])[0]) if t]
+            # Little text on the page itself: look inside what it holds, a sub-page's text or the rows of a
+            # table on it (e.g. a class page with just a "Topics" table: its topics say what the class is).
+            for sub in blocks:
+                if sub.get("type") == "child_page":
+                    texts += [t for t in map(_block_text, _children(sub["id"])[0]) if t]
+                elif sub.get("type") == "child_database":
+                    texts += [e["title"] for e in table_entries(sub["id"])[:12] if not is_generic_title(e["title"])]
+                if len(" ".join(texts)) >= 60:
+                    break
         result = ("; ".join(texts)[:limit], len(blocks) + (30 if more else 0))
     except AppError:
         result = ("", 0)

@@ -178,3 +178,22 @@ def test_the_class_list_is_looked_up_once_then_reused(fake_notion, fake_ai):
     before = len(fake_notion.calls)
     placement.find_classes(H("efrain"))
     assert len(fake_notion.calls) == before
+
+
+def test_the_rows_of_a_table_inside_a_class_say_what_it_is(fake_notion, fake_ai):
+    from tests.fakes import text
+    fake_notion.search += [
+        {"object": "page", "id": H("class5"), "parent": {"type": "database_id", "database_id": H("r_classes")},
+         "icon": None, "properties": {"Name": {"type": "title", "title": [{"plain_text": "class 5"}]}}},
+        {"object": "database", "id": H("topics5"), "parent": {"type": "page_id", "page_id": H("class5")},
+         "title": [{"plain_text": "Topics"}]},
+        *[{"object": "page", "id": H(f"t5{i}"), "parent": {"type": "database_id", "database_id": H("topics5")},
+           "icon": None, "properties": {"Name": {"type": "title", "title": [{"plain_text": t}]}}}
+          for i, t in enumerate(["Classical conditioning", "Memory and forgetting", "Developmental Psychology"])],
+    ]
+    fake_notion.schemas[H("topics5")] = {"Name": {"type": "title"}}
+    fake_notion.children[notion.normalize_id(H("class5"))] = [text("child_database", "Topics")]
+    fake_notion.children[notion.normalize_id(H("class5"))][0]["id"] = H("topics5")
+    guess = placement.guess_owner("Memory", "A psychology lecture on memory", only_person_id=H("ryan"))
+    assert guess["class_id"] == H("class5")
+    assert "class 5 — inside: Topics; Classical conditioning; Memory and forgetting" in fake_ai.prompts[-1]
