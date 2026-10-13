@@ -68,19 +68,49 @@ def _matches_class(title: str, tokens: set[str]) -> bool:
 # ---------- who / which class ----------
 
 def people() -> list[dict]:
+    """Whose Notion notes can go to. When people sign in by name, only the signed-in person: their own
+    workspace's top page, or their page in the shared Notion."""
     nodes = notion.page_tree()
+    account = notion.current()
+    if account.person:
+        return [_signed_in(nodes, account)]
     roots = [n for n in nodes if n["root"] and n["type"] == "page"
              and n["title"].strip().lower() not in config.HIDDEN_PEOPLE]
     return [{"id": n["id"], "title": n["title"], "icon": n["icon"]}
             for n in sorted(roots, key=lambda n: n["title"].lower())]
 
 
+def _signed_in(nodes: list[dict], account: notion.Account) -> dict:
+    if account.own:
+        # Their own workspace: everything their key sees sits under one top page (or a stand-in for
+        # several, see notion.page_tree).
+        tops = [n for n in nodes if n["parent"] is None and n["type"] == "page"]
+        if not tops:
+            raise AppError("Your Notion key can't see any pages yet. In Notion, open your top page → ••• → "
+                           "Connections → add your integration.")
+        top = next((n for n in tops if n.get("virtual")), tops[0])
+        return {"id": top["id"], "title": account.person, "icon": top["icon"]}
+    match = next((n for n in nodes if n["root"] and n["type"] == "page"
+                  and n["title"].strip().lower() == account.person.lower()), None)
+    if not match:
+        raise AppError(f"Couldn't find a page called “{account.person}” at the top of the shared Notion. "
+                       f"If you've moved to your own Notion, ask the site owner to add NOTION_TOKEN_"
+                       f"{config.env_key(account.person)} (see README).")
+    return {"id": match["id"], "title": match["title"], "icon": match["icon"]}
+
+
+def _forced_person(person_id: str | None) -> str | None:
+    """When people sign in by name, notes can only go to the signed-in person's Notion."""
+    return people()[0]["id"] if notion.current().person else person_id
+
+
 CLASSES_CACHE_SECONDS = 600
-_classes_cache: dict[str, tuple[float, list[dict]]] = {}
+_classes_cache: dict[tuple, tuple[float, list[dict]]] = {}
 
 
 def classes(person_id: str, note_title: str = "", summary: str = "", recorded_at: str = "") -> dict:
     """The classes in this person's Notion, plus the AI's guess at which one this lecture is for."""
+    person_id = _forced_person(person_id)
     found = find_classes(person_id)
     guess = None
     if found and (note_title or summary):
@@ -91,7 +121,7 @@ def classes(person_id: str, note_title: str = "", summary: str = "", recorded_at
 
 def find_classes(person_id: str) -> list[dict]:
     """Entries of the person's Courses/Classes table(s). Cached for a few minutes."""
-    key = notion.normalize_id(person_id)
+    key = (notion.current().token[-12:], notion.normalize_id(person_id))  # per Notion account
     cached = _classes_cache.get(key)
     if cached and time.time() - cached[0] < CLASSES_CACHE_SECONDS:
         return cached[1]
@@ -195,6 +225,8 @@ def guess_owner(note_title: str, summary: str, usual_person_id: str = "", only_p
     `only_person_id`: the person is already known (this device sends for them), so only the class is
     guessed. Returns {"person_id", "person_name", "class_id", "class_name", "class_title", "reason"}."""
     everyone = people()
+    if notion.current().person:  # signed in by name: it's theirs, only the class is guessed
+        only_person_id = everyone[0]["id"]
     known = [p for p in everyone if only_person_id and notion.same_id(p["id"], only_person_id)]
     if known:
         everyone = known
@@ -280,6 +312,7 @@ def _not_for_lectures(by_id: dict, node: dict) -> bool:
 # ---------- where should it go ----------
 
 def plan(person_id: str, class_id: str | None, class_text: str, note_title: str, summary: str) -> dict:
+    person_id = _forced_person(person_id)
     nodes = notion.page_tree()
     by_id = _by_id(nodes)
     person = _node(by_id, person_id)
@@ -328,8 +361,10 @@ def plan(person_id: str, class_id: str | None, class_text: str, note_title: str,
             groups.setdefault(notion.normalize_id(page["parent"]), []).append(page)
     for parent_key, pages in groups.items():
         parent = by_id.get(parent_key)
-        # Skip the class page itself and the classes table (its entries are classes, not lectures).
-        if not parent or notion.same_id(parent["id"], class_id) or notion.same_id(parent["id"], course_table):
+        # Skip the class page itself and the classes table (its entries are classes, not lectures),
+        # and the stand-in top of someone's own Notion (not a real page).
+        if not parent or parent.get("virtual") or notion.same_id(parent["id"], class_id) \
+                or notion.same_id(parent["id"], course_table):
             continue
         same_class = [p for p in pages if _matches_class(p["title"], tokens)]
         score = 40 + 12 * len(same_class) + 2 * len(pages)
@@ -358,8 +393,13 @@ def plan(person_id: str, class_id: str | None, class_text: str, note_title: str,
         base = 60 if course_table else 30
         add("page", class_node, base + 3 * len(inside), f"New page inside {class_title}", inside)
 
-    # 4. Last resort: the person's own page (or the site's default page).
-    add("page", person, 1, f"New page in {person['title']}", [])
+    # 4. Last resort: the person's own page (or the site's default page). Notion can't put a page at the
+    #    very top of a workspace, so for the stand-in top of someone's own Notion, its top pages instead.
+    if person.get("virtual"):
+        for top in [n for n in mine if notion.same_id(n.get("parent"), person_id) and n["type"] == "page"][:3]:
+            add("page", top, 1, f"New page in {top['title']}", [])
+    else:
+        add("page", person, 1, f"New page in {person['title']}", [])
     default = _node(by_id, notion.parent_page_id())
     if default:
         add("page", default, 0, f"New page in {default['title']}", [])

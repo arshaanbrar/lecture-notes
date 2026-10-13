@@ -19,6 +19,9 @@ You never edit code to add keys. All keys are environment variables:
 | `GROQ_API_KEY` | Groq API key (`gsk_…`) | [Step 1](#step-1--get-a-free-groq-api-key) | **Yes** |
 | `NOTION_TOKEN` | Notion integration secret (`ntn_…`) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | For Notion export |
 | `NOTION_PARENT_PAGE_ID` | A fallback page offered as a last-resort place for notes (paste its URL) | [Step 2](#step-2--connect-notion-one-time-for-everyone) | Optional |
+| `PEOPLE` | Turns on **sign in with your name**: e.g. `Arshaan, Efrain, Ryan, Adeola`. Each person's password is their name (any capitals), and the site uses their own Notion. See [Moving to your own Notion](#moving-to-your-own-notion) | — | Optional |
+| `NOTION_TOKEN_<NAME>` | That person's own Notion key, e.g. `NOTION_TOKEN_EFRAIN`. Without one, they keep using the shared `NOTION_TOKEN` and their page in it | Their own workspace | Optional |
+| `PASSWORD_<NAME>` | Changes that person's password from their name to something else, e.g. `PASSWORD_RYAN` | You make it up | Optional |
 | `HIDDEN_PEOPLE` | Names of people's top-level Notion pages to leave off the site, comma-separated, e.g. `Ryan, Alex` (default: nobody hidden). Their Notion isn't changed | — | Optional |
 | `GROQ_MODEL` | Models for notes, comma-separated, best first. Each has its own free limits, and when one runs out the next takes over (see [Groq limits](#groq-limits)). The default list is usually right | — | Optional |
 | `GROQ_FAST_MODEL` | Models for the study helper chat and quick questions, comma-separated, tried first so they don't use up the notes models' limits | — | Optional |
@@ -259,6 +262,30 @@ Under the recording, and on the Upload tab, there's **📎 Add lecture slides**.
 - **Links:** YouTube, Vimeo, Loom, Google Drive files shared publicly, direct `.mp3`/`.mp4` links, and [many other sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). The link must be public. YouTube sometimes blocks downloads from cloud servers. If a YouTube link fails on Render, download the video yourself and upload the file instead.
 
 ---
+
+## Moving to your own Notion
+
+When friends move from the shared Notion to their own accounts (copying their pages over), each person signs in with their name and the site writes to **their own** Notion:
+
+1. **Each person makes a Notion key in their own workspace:** [notion.so/profile/integrations](https://www.notion.so/profile/integrations) → **New integration** → name it "Lecture Notes", pick *their* workspace, type **Internal** → **Save** → copy the **Internal Integration Secret** (`ntn_…`).
+2. **They connect it to their top page:** open the page that holds everything (e.g. their copied "Efrain" page) → **•••** → **Connections** → add "Lecture Notes". Pages inside it are included.
+3. **They send the key to the site owner privately** (it gives access to their Notion; don't post it in a group chat).
+4. **The site owner adds them in Render → Environment:**
+   - `PEOPLE` = `Arshaan, Efrain, Ryan, Adeola`;
+   - `NOTION_TOKEN_EFRAIN` = Efrain's key, and the same for each person who has moved.
+
+   Then Save; Render restarts in about a minute.
+5. Open **`/check`** (sign in as yourself): **People** shows each person, whether they're on their own or the shared Notion, and anything missing.
+
+After that:
+- **Signing in:** everyone types their name once per device. The site then shows "Signed in as Efrain · Sign out", and there's no "Who is it for?" question: the AI only guesses which of **their** classes it is.
+- **Recording, transcribing, notes, the study helper and slides** work exactly as before for everyone (they don't use Notion).
+- **Recent notes** are kept per person, so a shared laptop doesn't mix them.
+- **Not moved yet?** Someone without their own key keeps using the shared `NOTION_TOKEN`, with their page found by their name. People can move one at a time.
+- **Copied pages work as they are.** The site finds tables, classes and timetables again by itself. Only linked views that point at a table that wasn't copied won't be readable; copy the original table too.
+- **If a key sees several separate pages** at the top of someone's Notion, they're treated together as that person's. New pages go inside one of them, since Notion can't put pages at the very top of a workspace.
+
+> ⚠️ Passwords are just names, so anyone who knows a name and finds the link can sign in as that person and write into their Notion. To make someone's password harder to guess, set `PASSWORD_<NAME>` (e.g. `PASSWORD_RYAN=ryan-tiger`). Anyone not in `PEOPLE` can't sign in at all.
 
 ## Optional: Running Whisper locally
 

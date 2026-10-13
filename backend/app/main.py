@@ -36,15 +36,29 @@ async def app_error_handler(_, exc: AppError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
-def require_password(x_app_password: str | None = Header(default=None)) -> None:
+async def current_person(x_app_password: str | None = Header(default=None)) -> str:
+    """Who's signed in. With PEOPLE set, everyone signs in with their name (any case) and this request
+    then uses their own Notion. Otherwise the optional shared APP_PASSWORD. Returns the person's name
+    ("" without per-person sign-in). Async on purpose: the Notion account it sets for the request then
+    carries into the endpoint (which runs in a worker thread with a copy of this context)."""
+    given = (x_app_password or "").strip().lower().encode()
+    if config.people_mode():
+        for person in config.people():
+            if secrets.compare_digest(given, person["password"].strip().lower().encode()):
+                notion.use_account(notion.Account(token=person["notion_token"], person=person["name"],
+                                                  own=person["own_notion"]))
+                return person["name"]
+        raise HTTPException(status_code=401, detail="That name isn't on the list.")
+    notion.use_account(None)  # the shared Notion
     if config.APP_PASSWORD and not secrets.compare_digest(
         (x_app_password or "").encode(), config.APP_PASSWORD.encode()
     ):
         raise HTTPException(status_code=401, detail="Wrong or missing password.")
+    return ""
 
 
 public = APIRouter(prefix="/api")
-api = APIRouter(prefix="/api", dependencies=[Depends(require_password)])
+api = APIRouter(prefix="/api", dependencies=[Depends(current_person)])
 
 
 @app.get("/healthz")
@@ -56,8 +70,9 @@ def healthz():
 @public.get("/config")
 def get_config():
     return {
-        "password_required": bool(config.APP_PASSWORD),
-        "notion_configured": notion.is_configured(),
+        "password_required": bool(config.APP_PASSWORD) or config.people_mode(),
+        "people_mode": config.people_mode(),  # everyone signs in with their name
+        "notion_configured": notion.is_configured() or any(p["notion_token"] for p in config.people()),
         "transcribe_backend": config.TRANSCRIBE_BACKEND,
         "max_upload_mb": config.MAX_UPLOAD_MB,
         "summary_chunk_chars": config.SUMMARY_CHUNK_CHARS,
@@ -65,8 +80,8 @@ def get_config():
 
 
 @api.get("/auth/check")
-def auth_check():
-    return {"ok": True}
+def auth_check(person: str = Depends(current_person)):
+    return {"ok": True, "person": person}
 
 
 @api.get("/check")

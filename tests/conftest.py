@@ -14,9 +14,9 @@ from tests.fakes import FakeAI, FakeNotion  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def fresh_caches():
-    notion._tree_cache.update(at=0.0, nodes=None)
-    for cache in (notion._table_cache, notion._sources_cache, notion._block_parents, placement._classes_cache):
-        cache.clear()
+    notion._caches.clear()
+    placement._classes_cache.clear()
+    notion.use_account(None)
     yield
 
 

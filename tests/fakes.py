@@ -134,6 +134,42 @@ EXTRAS = {
 }
 
 
+class OwnWorkspace(FakeNotion):
+    """Someone's own Notion (after moving out of the shared one), with their own key."""
+
+    def __init__(self, search, schemas):
+        super().__init__()
+        self.search, self.schemas = search, schemas
+
+
+def efrain_workspace() -> OwnWorkspace:
+    """Efrain copied his page into his own Notion and shared just that top page with his key."""
+    return OwnWorkspace([
+        page("e_top", "Efrain (copy)", W), page("e_acad", "Academic", P("e_top")),
+        table("e_courses", "Courses", P("e_acad")),
+        page("e_soc", "SOCSCI 1T03", D("e_courses")), page("e_pol", "POLSC 1AA3", D("e_courses")),
+    ], {H("e_courses"): {"Name": {"type": "title"}}})
+
+
+def adeola_workspace() -> OwnWorkspace:
+    """Adeola shared two pages separately at the top of her own Notion."""
+    return OwnWorkspace([
+        page("a_uni", "Uni", W), page("a_misc", "Misc", W),
+        page("a1", "psych lec 1", P("a_uni")), page("a2", "psych lec 2", P("a_uni")),
+        page("a3", "psych lec 3", P("a_uni")),
+    ], {})
+
+
+class FakeAccounts:
+    """Several Notion workspaces, one per key: each request goes to the current account's."""
+
+    def __init__(self, workspaces: dict):
+        self.workspaces = workspaces
+
+    def request(self, method, path, body=None, version=notion.VERSION):
+        return self.workspaces[notion.current().token].request(method, path, body, version)
+
+
 class FakeAI:
     """Stand-in for Groq: deterministic answers based on what the prompt asks for."""
 
@@ -145,7 +181,8 @@ class FakeAI:
         self.prompts.append(prompt)
         if "which student" in system:
             lecture = prompt.split("\nP0.")[0].lower()  # the lecture's part, before the list of people
-            for subject, name, cls_start in (("discrete", "Arshaan", "Discrete"), ("management", "Ryan", "Intro to Management")):
+            for subject, name, cls_start in (("discrete", "Arshaan", "Discrete"), ("management", "Ryan", "Intro to Management"),
+                                             ("sociology", "Efrain", "SOCSCI")):
                 person = re.search(rf"^P(\d+)\. {name}", prompt, re.M)
                 cls = re.search(rf"^   C(\d+): {cls_start}", prompt, re.M)
                 if subject in lecture and person and cls:

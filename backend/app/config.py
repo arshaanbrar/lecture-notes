@@ -6,6 +6,7 @@
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 
@@ -64,6 +65,32 @@ NOTION_PARENT_PAGE_ID = _env("NOTION_PARENT_PAGE_ID")
 # People whose top-level Notion page is left off the site (comma-separated page titles).
 # Their Notion isn't touched; they just don't show up in "Who is it for?" or the AI's guesses.
 HIDDEN_PEOPLE = {n.strip().lower() for n in _env("HIDDEN_PEOPLE", "").split(",") if n.strip()}
+
+# ---------- one sign-in per person (each with their own Notion) ----------
+# PEOPLE=Arshaan, Efrain, Ryan, Adeola turns it on: everyone signs in with their name (any case) and the
+# site uses that person's own Notion: NOTION_TOKEN_EFRAIN etc. Someone without their own key keeps
+# using the shared NOTION_TOKEN, with their page found by name. PASSWORD_<NAME> changes someone's
+# password from their name to something else. APP_PASSWORD isn't used then.
+
+
+def env_key(name: str) -> str:
+    """"Ryan" → "RYAN", for NOTION_TOKEN_RYAN and PASSWORD_RYAN."""
+    return re.sub(r"[^A-Z0-9]", "", name.upper())
+
+
+def people() -> list[dict]:
+    """[{name, password, notion_token, own_notion}] from PEOPLE (read now, so tests can change it)."""
+    found = []
+    for name in [n.strip() for n in _env("PEOPLE").split(",") if n.strip()]:
+        own = _env(f"NOTION_TOKEN_{env_key(name)}")
+        found.append({"name": name, "password": _env(f"PASSWORD_{env_key(name)}") or name,
+                      "notion_token": own or NOTION_TOKEN, "own_notion": bool(own)})
+    return found
+
+
+def people_mode() -> bool:
+    return bool(_env("PEOPLE"))
+
 
 # Optional shared password so strangers can't use up your free quotas. Empty = no password.
 APP_PASSWORD = _env("APP_PASSWORD")

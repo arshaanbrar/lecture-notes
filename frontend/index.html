@@ -12,6 +12,8 @@
   <header class="site-header">
     <h1>📝 Lecture Notes</h1>
     <p>Record or upload a lecture or meeting, or drop in a document. Get summary notes and a Notion page.</p>
+    <p id="signed-in" class="signed-in" hidden>Signed in as <strong id="signed-in-name"></strong> ·
+      <button type="button" class="linkish" id="sign-out">Sign out</button></p>
   </header>
 
   <main>
@@ -22,8 +24,8 @@
 
     <!-- Shown only when the site owner set APP_PASSWORD -->
     <section id="unlock" class="card" hidden>
-      <h2>Enter password</h2>
-      <p class="muted">This site is password-protected.</p>
+      <h2 id="unlock-title">Enter password</h2>
+      <p class="muted" id="unlock-text">This site is password-protected.</p>
       <form id="unlock-form" class="row">
         <input id="unlock-input" type="password" placeholder="Password" autocomplete="current-password" required>
         <button class="btn primary" type="submit">Unlock</button>
@@ -213,8 +215,8 @@
         <h2>Send to Notion</h2>
         <p id="notion-off" class="muted" hidden>Notion isn't connected yet. The site owner needs to add <code>NOTION_TOKEN</code> (see README).</p>
         <div id="notion-on">
-          <label class="label" for="who">Who is it for?</label>
-          <select id="who"></select>
+          <label class="label who-pick" for="who">Who is it for?</label>
+          <select id="who" class="who-pick"></select>
           <p id="who-hint" class="hint"></p>
 
           <div id="class-step" hidden>

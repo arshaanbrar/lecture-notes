@@ -6,6 +6,7 @@ quick job never waits behind someone's hour-long recording.
 Jobs live in memory only — the browser keeps the results once they're done.
 """
 
+import contextvars
 import logging
 import shutil
 import tempfile
@@ -16,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import audio, config, documents, placement, slides, summarize, transcribe
+from . import audio, documents, notion, placement, slides, summarize, transcribe
 from .utils import AppError
 
 log = logging.getLogger(__name__)
@@ -125,7 +126,8 @@ def _submit(label: str, workdir: Path, options: Options, path: Path | None = Non
         for old_id in [k for k, j in _jobs.items() if j.created < cutoff]:
             del _jobs[old_id]
         _jobs[job.id] = job
-    _lanes[job.lane].submit(_run, job, workdir, options, path, url, text)
+    # The job runs with this request's context: the signed-in person's Notion account comes along.
+    _lanes[job.lane].submit(contextvars.copy_context().run, _run, job, workdir, options, path, url, text)
     return job
 
 
@@ -134,7 +136,7 @@ PLACEMENT_WAIT_SECONDS = 30  # after the notes are done, how long to wait for th
 
 def _start_placement(job: Job, text: str, options: Options) -> threading.Thread | None:
     """Guess whose lecture it is and where in Notion it goes, while the notes are being written."""
-    if not options.place or not config.NOTION_TOKEN:
+    if not options.place or not notion.is_configured():
         return None
 
     def work():
@@ -143,7 +145,7 @@ def _start_placement(job: Job, text: str, options: Options) -> threading.Thread 
         except Exception:  # only a head start: the page works it out itself if this fails
             log.warning("Placement for job %s failed", job.id, exc_info=True)
 
-    thread = threading.Thread(target=work, daemon=True)
+    thread = threading.Thread(target=contextvars.copy_context().run, args=(work,), daemon=True)
     thread.start()
     return thread
 

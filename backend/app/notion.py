@@ -1,7 +1,16 @@
-"""Notion API helpers, using one shared internal integration (set up once by the site owner)."""
+"""Notion API helpers.
 
+Each request uses one Notion account: the shared integration (NOTION_TOKEN), or, when people sign in
+by name (PEOPLE), that person's own integration in their own workspace (NOTION_TOKEN_<NAME>). The
+account is set per request (`use_account`) and carried into background threads with the context,
+and everything cached is kept per account, so one person's pages are never shown to another.
+"""
+
+import contextvars
+import hashlib
 import re
 import time
+from dataclasses import dataclass
 from datetime import date
 
 import httpx
@@ -18,8 +27,44 @@ MAX_BLOCKS_PER_REQUEST = 100
 CACHE_SECONDS = 60
 
 
+@dataclass(frozen=True)
+class Account:
+    token: str
+    person: str = ""    # the signed-in person's name ("" = no per-person sign-in)
+    own: bool = False   # their own workspace (else the shared one, with their page found by name)
+
+
+_account: contextvars.ContextVar[Account | None] = contextvars.ContextVar("notion_account", default=None)
+
+
+def current() -> Account:
+    return _account.get() or Account(token=config.NOTION_TOKEN)
+
+
+def use_account(account: Account | None) -> None:
+    """Use this Notion account for the rest of this request (and the background work it starts)."""
+    _account.set(account)
+
+
+def with_account(account: Account, fn, *args):
+    """Run `fn` with another account, without changing the current one."""
+    def run():
+        use_account(account)
+        return fn(*args)
+    return contextvars.copy_context().run(run)
+
+
 def is_configured() -> bool:
-    return bool(config.NOTION_TOKEN)
+    return bool(current().token)
+
+
+_caches: dict[str, dict] = {}  # per account (hash of its key): what's been looked up in its Notion
+
+
+def _cache(name: str) -> dict:
+    key = hashlib.sha256(current().token.encode()).hexdigest()[:16]
+    return _caches.setdefault(key, {"tree": {"at": 0.0, "nodes": None}, "tables": {}, "sources": {},
+                                    "blocks": {}})[name]
 
 
 def parent_page_id() -> str:
@@ -38,10 +83,11 @@ def same_id(a: str | None, b: str | None) -> bool:
 
 
 def _request(method: str, path: str, body: dict | None = None, version: str = VERSION) -> dict:
-    if not config.NOTION_TOKEN:
+    account = current()
+    if not account.token:
         raise AppError("Notion isn't connected yet. The site owner needs to set NOTION_TOKEN (see README).")
     headers = {
-        "Authorization": f"Bearer {config.NOTION_TOKEN}",
+        "Authorization": f"Bearer {account.token}",
         "Notion-Version": version,
         "Content-Type": "application/json",
     }
@@ -119,8 +165,6 @@ def _links(obj: dict) -> list[str]:
 
 MAX_SEARCH_REQUESTS = 30  # 100 results each → up to 3000 pages/tables
 
-_tree_cache: dict = {"at": 0.0, "nodes": None}
-_block_parents: dict[str, str | None] = {}
 
 
 def _raw_parent(obj: dict) -> tuple[str, str | None]:
@@ -131,8 +175,9 @@ def _raw_parent(obj: dict) -> tuple[str, str | None]:
 
 def _resolve_block_parent(block_id: str) -> str | None:
     """Pages inside columns/toggles have a block as parent; walk up to the page that holds it."""
-    if block_id in _block_parents:
-        return _block_parents[block_id]
+    blocks = _cache("blocks")
+    if block_id in blocks:
+        return blocks[block_id]
     result, current = None, block_id
     for _ in range(6):
         try:
@@ -143,15 +188,16 @@ def _resolve_block_parent(block_id: str) -> str | None:
             result = pid
             break
         current = pid
-    _block_parents[block_id] = result
+    blocks[block_id] = result
     return result
 
 
 def page_tree(refresh: bool = False) -> list[dict]:
     """Every page/table shared with the integration, with its parent's ID (None = top level).
     `root` marks pages at the very top of the workspace (e.g. one page per person)."""
-    if not refresh and _tree_cache["nodes"] is not None and time.time() - _tree_cache["at"] < CACHE_SECONDS:
-        return _tree_cache["nodes"]
+    tree = _cache("tree")
+    if not refresh and tree["nodes"] is not None and time.time() - tree["at"] < CACHE_SECONDS:
+        return tree["nodes"]
 
     results, cursor = [], None
     for _ in range(MAX_SEARCH_REQUESTS):
@@ -185,21 +231,35 @@ def page_tree(refresh: bool = False) -> list[dict]:
         if node["parent"] not in nodes:
             node["parent"] = None
 
-    _tree_cache.update(at=time.time(), nodes=list(nodes.values()))
-    return _tree_cache["nodes"]
+    account = current()
+    tops = [n for n in nodes.values() if n["parent"] is None]  # everything their key sees, at its top
+    if account.own and len(tops) > 1:
+        # Someone's own workspace with several pages shared at the top: hold them under one "person"
+        # node (not a real page), so everything in their Notion counts as theirs.
+        virtual = virtual_root_id(account.person)
+        for n in tops:
+            n["parent"], n["root"] = virtual, False
+        nodes[virtual] = {"id": virtual, "type": "page", "title": account.person, "icon": "", "parent": None,
+                          "root": True, "virtual": True, "edited": "", "props": "", "links": []}
+
+    tree.update(at=time.time(), nodes=list(nodes.values()))
+    return tree["nodes"]
+
+
+def virtual_root_id(name: str) -> str:
+    h = hashlib.md5(f"workspace:{name}".encode()).hexdigest()
+    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
 
 
 def forget_cached() -> None:
-    _tree_cache["nodes"] = None
-    _table_cache.clear()
+    _cache("tree")["nodes"] = None
+    _cache("tables").clear()
 
 
 # ---------- tables ----------
 
 GENERIC_TITLES = {"", "untitled", "untitled table", "untitled database", "new database", "new table"}
 
-_sources_cache: dict[str, list[dict]] = {}
-_table_cache: dict[str, tuple[float, dict | None]] = {}
 
 
 def is_generic_title(title: str) -> bool:
@@ -209,7 +269,8 @@ def is_generic_title(title: str) -> bool:
 
 def _data_sources(database_id: str) -> list[dict]:
     """The table(s) a database block shows. A linked view's source is another table."""
-    if database_id not in _sources_cache:
+    sources_cache = _cache("sources")
+    if database_id not in sources_cache:
         try:
             db = _request("GET", f"/databases/{database_id}", version=DATA_SOURCES_VERSION)
             sources = list(db.get("data_sources", []))
@@ -217,10 +278,10 @@ def _data_sources(database_id: str) -> list[dict]:
             title = "".join(t.get("plain_text", "") for t in db.get("title", [])).strip()
             if title.lower().startswith("view of "):
                 sources.append({"id": "", "name": title[8:].strip()})
-            _sources_cache[database_id] = sources
+            sources_cache[database_id] = sources
         except AppError:
-            _sources_cache[database_id] = []
-    return _sources_cache[database_id]
+            sources_cache[database_id] = []
+    return sources_cache[database_id]
 
 
 def data_source_label(database_id: str) -> str:
@@ -268,7 +329,7 @@ def table_entries(database_id: str) -> list[dict]:
 def table_info(table_id: str) -> dict | None:
     """The columns of a table we can add entries to, or None if Notion won't let us read it."""
     key = normalize_id(table_id)
-    cached = _table_cache.get(key)
+    cached = _cache("tables").get(key)
     if cached and time.time() - cached[0] < CACHE_SECONDS * 10:
         return cached[1]
     info = None
@@ -300,7 +361,7 @@ def table_info(table_id: str) -> dict | None:
             }
     except AppError:
         info = None
-    _table_cache[key] = (time.time(), info)
+    _cache("tables")[key] = (time.time(), info)
     return info
 
 

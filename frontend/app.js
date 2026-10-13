@@ -42,7 +42,7 @@ async function api(path, opts = {}) {
   let data = null;
   try { data = await res.json(); } catch { /* non-JSON */ }
   if (res.status === 401) {
-    lock("Please enter the password.");
+    lock(lockMessage());
     throw new Error("Password required.");
   }
   if (!res.ok) {
@@ -73,27 +73,80 @@ function setBusy(busy) {
   $$(".source").forEach((b) => { if (!b.dataset.unsupported) b.disabled = busy || !!state.rec; });
 }
 
-// ---------- password lock ----------
+// ---------- password lock / signing in ----------
+// With PEOPLE set on the server, everyone signs in with their name: the site then uses their own
+// Notion and only guesses the class. Otherwise there's at most one shared password.
+
+const PERSON_KEY = "lecture-notes-person";
+const peopleMode = () => !!state.config?.people_mode;
+
+function signedInAs() {
+  return peopleMode() ? recall(PERSON_KEY) : "";
+}
 
 function lock(msg) {
   document.body.classList.add("locked");
   $("#unlock").hidden = false;
+  if (peopleMode()) {
+    $("#unlock-title").textContent = "Sign in";
+    $("#unlock-text").textContent = "Type your name to sign in.";
+    $("#unlock-input").type = "text";
+    $("#unlock-input").placeholder = "Your name";
+    $("#unlock-input").autocomplete = "username";
+    $("#unlock-form button").textContent = "Sign in";
+  }
   $("#unlock-msg").textContent = msg || "";
   $("#unlock-input").focus();
 }
 
+function lockMessage() {
+  return peopleMode() ? "Please sign in with your name." : "Please enter the password.";
+}
+
+function showSignedIn() {
+  const name = signedInAs();
+  $("#signed-in").hidden = !name;
+  $("#signed-in-name").textContent = name;
+  document.body.classList.toggle("people-mode", peopleMode());
+}
+
+// Asks the server who this password belongs to (people mode), and shows it.
+async function checkSignIn() {
+  const res = await fetch("/api/auth/check", { headers: authHeaders() });
+  if (!res.ok) return false;
+  const { person } = await res.json();
+  if (person !== recall(PERSON_KEY)) {
+    remember(PERSON_KEY, person || "");
+    sendState.people = null; // a different person: their own Notion and names
+    renderHistory();
+  }
+  showSignedIn();
+  return true;
+}
+
 $("#unlock-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  setPassword($("#unlock-input").value);
+  setPassword($("#unlock-input").value.trim());
   try {
-    const res = await fetch("/api/auth/check", { headers: authHeaders() });
-    if (!res.ok) throw new Error();
+    if (!await checkSignIn()) throw new Error();
     document.body.classList.remove("locked");
     $("#unlock").hidden = true;
     $("#unlock-input").value = "";
+    $("#unlock-msg").textContent = "";
   } catch {
-    $("#unlock-msg").textContent = "That password didn't work.";
+    $("#unlock-msg").textContent = peopleMode() ? "That name isn't on the list." : "That password didn't work.";
   }
+});
+
+$("#sign-out").addEventListener("click", () => {
+  setPassword("");
+  remember(PERSON_KEY, "");
+  sendState.people = null;
+  $("#results").hidden = true;      // the next person shouldn't see these notes
+  $("#notion-card").hidden = true;
+  showSignedIn();
+  renderHistory();
+  lock();
 });
 
 // ---------- tabs ----------
@@ -685,7 +738,7 @@ function uploadWithProgress(blob, filename) {
     xhr.onload = () => {
       let data = null;
       try { data = JSON.parse(xhr.responseText); } catch { /* ignore */ }
-      if (xhr.status === 401) { lock("Please enter the password."); reject(new Error("Password required.")); }
+      if (xhr.status === 401) { lock(lockMessage()); reject(new Error("Password required.")); }
       else if (xhr.status >= 400) reject(Object.assign(new Error(errorText(data, xhr.status)), { status: xhr.status }));
       else resolve(data);
     };
@@ -1055,9 +1108,10 @@ async function guessOwner() {
   if (known) {
     $("#who").value = guess.person_id;
     const name = sendState.people.find((p) => p.id === guess.person_id).title;
-    hint.textContent = guess.person_id === devicePerson()
-      ? `📱 This device sends ${name}'s notes. Pick another name if this lecture is someone else's.`
-      : "🤖 Guessed from the lecture. Change it if that's wrong.";
+    hint.textContent = peopleMode() ? `💾 Saving to ${signedInAs() || name}'s Notion.`
+      : guess.person_id === devicePerson()
+        ? `📱 This device sends ${name}'s notes. Pick another name if this lecture is someone else's.`
+        : "🤖 Guessed from the lecture. Change it if that's wrong.";
     await loadClasses({ preferClass: guess.class_id, preferText: guess.class_name, reason: guess.reason });
   } else {
     hint.textContent = "";
@@ -1073,7 +1127,7 @@ async function loadPeople(refresh = false) {
     sendState.people = people;
     who.replaceChildren(new Option("Choose a name…", ""),
       ...people.map((p) => new Option(`${p.icon ? p.icon + " " : ""}${p.title}`, p.id)));
-    const saved = devicePerson() || recall(WHO_KEY);
+    const saved = people.length === 1 ? people[0].id : devicePerson() || recall(WHO_KEY);
     if (people.some((p) => p.id === saved)) who.value = saved;
   } catch (err) {
     who.replaceChildren(new Option("Couldn't load names", ""));
@@ -1295,7 +1349,8 @@ async function saveToHistory(job) {
   const notes = state.result.notes;
   try {
     await store.historySave({ id: job.id, date: Date.now(), title: notes.title || job.label || "Notes",
-                              notes, transcript: job.transcript, notion: null, recordedAt: state.recordedAt || "" });
+                              notes, transcript: job.transcript, notion: null, recordedAt: state.recordedAt || "",
+                              person: signedInAs() });
   } catch { /* storage blocked: no history, everything else still works */ }
   renderHistory();
 }
@@ -1303,6 +1358,8 @@ async function saveToHistory(job) {
 async function renderHistory() {
   let items = [];
   try { items = await store.historyList(); } catch { /* no storage */ }
+  const me = signedInAs(); // on a shared device, only the signed-in person's notes
+  items = items.filter((item) => !me || !item.person || item.person === me);
   const list = $("#history-list");
   list.replaceChildren();
   for (const item of items) {
@@ -1378,7 +1435,11 @@ async function init() {
   $("#file-limit").textContent = `Up to ${cfg.max_upload_mb} MB`;
   $("#notion-off").hidden = cfg.notion_configured;
   $("#notion-on").hidden = !cfg.notion_configured;
-  if (cfg.password_required && !getPassword()) lock();
+  if (cfg.people_mode) {
+    // Signed in before? Check the name still works (and who it is); otherwise ask for it.
+    if (!getPassword() || !await checkSignIn().catch(() => false)) lock();
+    renderHistory();
+  } else if (cfg.password_required && !getPassword()) lock();
 }
 
 init();

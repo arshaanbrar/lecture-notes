@@ -55,6 +55,26 @@ def _groq_limits(listed: set[str]) -> dict:
     return _item("Groq free limits", bool(notes), detail)
 
 
+def _people() -> dict:
+    """For the site owner: each person who signs in by name, and whether their Notion is reachable."""
+    rows, ok = [], True
+    for person in config.people():
+        account = notion.Account(token=person["notion_token"], person=person["name"], own=person["own_notion"])
+        where = "own Notion" if person["own_notion"] else "shared Notion"
+        if not person["notion_token"]:
+            rows.append(f"{person['name']}: no Notion key")
+            ok = False
+            continue
+        try:
+            nodes = notion.with_account(account, notion.page_tree, True)
+            page = notion.with_account(account, placement.people)[0]
+            rows.append(f"{person['name']}: {where} ✓ ({len(nodes)} pages; notes go under “{page['title']}”)")
+        except AppError as e:
+            rows.append(f"{person['name']}: {where} ✗ {e}")
+            ok = False
+    return _item("People (sign in with their name)", ok, " · ".join(rows))
+
+
 def run() -> list[dict]:
     items = []
 
@@ -94,6 +114,8 @@ def run() -> list[dict]:
                                "the integration (••• → Connections)."))
         except AppError as e:
             items.append(_item("Notion", False, str(e)))
+    if config.people_mode():
+        items.append(_people())
 
     # --- tools on the server ---
     for name, cmd in (("ffmpeg (audio)", "ffmpeg"), ("ffprobe (audio)", "ffprobe")):
