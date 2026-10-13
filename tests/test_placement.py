@@ -133,3 +133,24 @@ def test_the_guess_prompt_stays_small_however_much_people_have(fake_notion, fake
     people_part = prompt.split("Notion. Each one's classes (C…), timetable or lecture pages:\n", 1)[1].split("\n\n", 1)[0]
     assert len(people_part) < 1500 + 300  # a fair share each, plus the names
     assert "P0. Arshaan" in people_part and "P2. Ryan" in people_part  # nobody is left out
+
+
+def test_generic_class_names_and_planners_dont_attract_lectures(fake_notion, fake_ai):
+    # Ryan's new Notion: classes named "class 1", "class 3"…, and an assignments table whose entries say
+    # "(in class…)". Neither the word "class" nor an "Upcoming" table makes a place for lectures.
+    fake_notion.search += [
+        {"object": "page", "id": H("asg"), "parent": {"type": "page_id", "page_id": H("r_uni")}, "icon": None,
+         "properties": {"Name": {"type": "title", "title": [{"plain_text": "Assignments"}]}}},
+        {"object": "database", "id": H("upcoming"), "parent": {"type": "page_id", "page_id": H("asg")},
+         "title": [{"plain_text": "Upcoming"}]},
+        *[{"object": "page", "id": H(f"test{i}"), "parent": {"type": "database_id", "database_id": H("upcoming")},
+           "icon": None, "properties": {"Name": {"type": "title", "title": [{"plain_text": f"CSC105 — Test {i} (in class, 1 hour)"}]}}}
+          for i in range(5)],
+        {"object": "page", "id": H("class3"), "parent": {"type": "database_id", "database_id": H("r_classes")},
+         "icon": None, "properties": {"Name": {"type": "title", "title": [{"plain_text": "class 3"}]}}},
+    ]
+    fake_notion.schemas[H("upcoming")] = {"Name": {"type": "title"}}
+    plan = placement.plan(H("ryan"), H("class3"), "", "Memory", "psychology lecture on memory")
+    best = plan["candidates"][plan["best"]]
+    assert notion.same_id(best["target_id"], H("ryan"))  # still his own page, where his lectures are
+    assert not any(notion.same_id(c["target_id"], H("upcoming")) for c in plan["candidates"])

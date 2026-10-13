@@ -23,8 +23,12 @@ COURSE_COLUMNS = re.compile(r"class code|course code|credits?|teacher|professor|
 LECTURE_WORDS = re.compile(r"\blec\b|\blecs?\s*\d|lecture|\bweek\s*\d|\btut|\blab\b|class notes|\bnotes?\b|topics?", re.I)
 # Tables and pages that mention classes but aren't where lecture notes belong.
 NOT_LECTURES = re.compile(r"time\s*table|schedule|calend[ae]r|assess?ments?|\bexams?\b|deadlines?|"
-                          r"\bgrades?\b|to.?dos?|\btasks?\b", re.I)
-STOP_WORDS = {"for", "and", "the", "with", "intro", "introduction", "applications", "to", "of", "in", "a", "an"}
+                          r"\bgrades?\b|to.?dos?|\btasks?\b|assignments?|\bupcoming\b|\bplanners?\b|"
+                          r"\bmonth(ly)?\b", re.I)
+# Words that don't say which class something is (so "class 3" doesn't match every title with "class").
+STOP_WORDS = {"for", "and", "the", "with", "intro", "introduction", "applications", "to", "of", "in", "a", "an",
+              "class", "classes", "course", "courses", "lecture", "lectures", "lec", "notes", "note", "unit",
+              "module", "subject", "other", "all"}
 MAX_CANDIDATES = 6
 GUESS_MAX_WAIT = 20  # someone may be watching: if Groq's limits are out, skip the guess (they pick it)
 

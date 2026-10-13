@@ -84,7 +84,7 @@ def run() -> list[dict]:
     else:
         try:
             models = _groq_models()
-            items.append(_item("Groq key", True, f"Works ({len(models)} models available)."))
+            items.append(_item("Groq key", True, f"Works. Models this key has: {', '.join(sorted(models))}."))
             ok, detail = _try_model(fast=False)
             items.append(_item("AI for notes", ok, f"Answering with {detail}." if ok else detail))
             ok, detail = _try_model(fast=True)
