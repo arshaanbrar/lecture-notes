@@ -105,3 +105,22 @@ def test_a_moved_persons_class_page_is_suggested_not_their_class_list(client, pe
     best = plan["candidates"][plan["best"]]
     assert best["kind"] == "page" and best["target_id"] == H("e_soc")  # inside his SOCSCI 1T03 card
     assert H("e_courses") not in {c["target_id"] for c in plan["candidates"]}
+
+
+def test_two_lists_of_the_same_classes_keep_the_one_holding_the_notes(client, people):
+    from tests.fakes import D, page, table, text
+    efrain = people.workspaces["efrain-key"]
+    # A new "Classes" table with the same classes under longer names, and nothing inside them...
+    efrain.search += [table("e_classes", "Classes", P_("e_acad")),
+                      page("e_c1", "SOCSCI 1T03-C01LEC (3806)", D("e_classes")),
+                      page("e_c2", "POLSCI 1AA3-C01LEC (3851)", D("e_classes"))]
+    efrain.schemas[H("e_classes")] = {"Name": {"type": "title"}}
+    # ...while his copied "Courses" cards hold his notes.
+    efrain.children[notion.normalize_id(H("e_soc"))] = [text("paragraph", "Meeting notes"), text("child_page", "Lecture 2")]
+    efrain.children[notion.normalize_id(H("e_pol"))] = [text("paragraph", "Political Science Lecture: …")]
+    classes = client.post("/api/notion/classes", headers=as_("efrain"), json={"person_id": H("e_top")}).json()["classes"]
+    assert [(c["group"], c["title"]) for c in classes] == [("Courses", "SOCSCI 1T03"), ("Courses", "POLSC 1AA3")]
+
+
+def P_(i):
+    return {"type": "page_id", "page_id": H(i)}

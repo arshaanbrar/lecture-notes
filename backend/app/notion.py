@@ -64,7 +64,7 @@ _caches: dict[str, dict] = {}  # per account (hash of its key): what's been look
 def _cache(name: str) -> dict:
     key = hashlib.sha256(current().token.encode()).hexdigest()[:16]
     return _caches.setdefault(key, {"tree": {"at": 0.0, "nodes": None}, "tables": {}, "sources": {},
-                                    "blocks": {}})[name]
+                                    "blocks": {}, "contents": {}})[name]
 
 
 def parent_page_id() -> str:
@@ -254,6 +254,46 @@ def virtual_root_id(name: str) -> str:
 def forget_cached() -> None:
     _cache("tree")["nodes"] = None
     _cache("tables").clear()
+
+
+# ---------- what's on a page ----------
+
+CONTENTS_SECONDS = 600
+
+
+def _block_text(block: dict) -> str:
+    kind = block.get("type", "")
+    data = block.get(kind) or {}
+    if kind in ("child_page", "child_database"):
+        return data.get("title", "").strip()
+    return "".join(t.get("plain_text", "") for t in data.get("rich_text") or []).strip()
+
+
+def _children(page_id: str) -> tuple[list[dict], bool]:
+    data = _request("GET", f"/blocks/{normalize_id(page_id)}/children?page_size=30")
+    return data.get("results", []), bool(data.get("has_more"))
+
+
+def page_contents(page_id: str, limit: int = 300) -> tuple[str, int]:
+    """What's on a page, briefly (its text, headings and sub-page titles), and how many blocks it has.
+    If the page itself has little text, the first sub-page is read too (e.g. a class page that only
+    holds a "Topics" page). Cached for a few minutes; ("", 0) if Notion won't show it."""
+    cache, key = _cache("contents"), normalize_id(page_id)
+    hit = cache.get(key)
+    if hit and time.time() - hit[0] < CONTENTS_SECONDS:
+        return hit[1]
+    try:
+        blocks, more = _children(key)
+        texts = [t for t in map(_block_text, blocks) if t]
+        if len(" ".join(texts)) < 60:
+            sub = next((b for b in blocks if b.get("type") == "child_page"), None)
+            if sub:
+                texts += [t for t in map(_block_text, _children(sub["id"])[0]) if t]
+        result = ("; ".join(texts)[:limit], len(blocks) + (30 if more else 0))
+    except AppError:
+        result = ("", 0)
+    cache[key] = (time.time(), result)
+    return result
 
 
 # ---------- tables ----------

@@ -5,10 +5,12 @@ person's Notion (a lectures table linked to the class, the page where their othe
 the class live, the class page itself…), and the AI picks the best one.
 """
 
+import contextvars
 import json
 import math
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 from . import config, groq, notion
@@ -124,16 +126,17 @@ def classes(person_id: str, note_title: str = "", summary: str = "", recorded_at
 
 
 def find_classes(person_id: str) -> list[dict]:
-    """Entries of the person's Courses/Classes table(s). Cached for a few minutes."""
-    key = (notion.current().token[-12:], notion.normalize_id(person_id))  # per Notion account
-    cached = _classes_cache.get(key)
+    """Entries of the person's Courses/Classes table(s), each with what's inside its page. Cached for a
+    few minutes."""
+    cache_key = (notion.current().token[-12:], notion.normalize_id(person_id))  # per Notion account
+    cached = _classes_cache.get(cache_key)
     if cached and time.time() - cached[0] < CLASSES_CACHE_SECONDS:
         return cached[1]
     nodes = notion.page_tree()
     by_id = _by_id(nodes)
     tables = [n for n in nodes if n["type"] == "database" and _inside(by_id, n, person_id)]
 
-    found, seen = [], set()
+    lists, seen = [], set()
     for table in tables[:25]:
         name = table["title"]
         if notion.is_generic_title(name):
@@ -144,16 +147,57 @@ def find_classes(person_id: str) -> list[dict]:
             if not _has_course_columns(table["id"]):
                 continue
             name = "Classes" if notion.is_generic_title(name) or name.lower().startswith("new database") else name
+        entries = []
         for entry in notion.table_entries(table["id"])[:80]:
-            key = notion.normalize_id(entry["id"])
-            if key in seen or notion.is_generic_title(entry["title"]):
+            entry_id = notion.normalize_id(entry["id"])
+            if entry_id in seen or notion.is_generic_title(entry["title"]):
                 continue
-            seen.add(key)
-            found.append({"id": entry["id"], "title": entry["title"], "icon": entry["icon"], "group": name})
-        if len(found) >= 120:
+            seen.add(entry_id)
+            entries.append({"id": entry["id"], "title": entry["title"], "icon": entry["icon"], "group": name})
+        if entries:
+            lists.append(entries)
+        if sum(map(len, lists)) >= 120:
             break
-    _classes_cache[key] = (time.time(), found)
+
+    # Read what's inside each class page: it tells classes named "class 3" apart, and shows which of two
+    # lists of the same classes actually holds the notes.
+    contents = _read_contents([c["id"] for entries in lists for c in entries])
+    for entries in lists:
+        for c in entries:
+            c["inside"], c["blocks"] = contents.get(c["id"], ("", 0))
+    found = [c for entries in _without_repeats(lists) for c in entries]
+    _classes_cache[cache_key] = (time.time(), found)
     return found
+
+
+def _read_contents(page_ids: list[str]) -> dict[str, tuple[str, int]]:
+    """notion.page_contents for many pages, a few at a time (each with this request's Notion account)."""
+    if not page_ids:
+        return {}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {i: pool.submit(contextvars.copy_context().run, notion.page_contents, i) for i in page_ids}
+        return {i: f.result() for i, f in futures.items()}
+
+
+def _course_key(title: str) -> str:
+    """The same class in two lists: "SOCIOL 1Z03-C02LEC (3918)" and "SOCIOL 1Z03" → "soci 1z03";
+    "POLSCI 1AA3…" and "POLSC 1AA3" → "pols 1aa3". Otherwise the plain title."""
+    code = re.search(r"\b([a-z]{2,8})\s*(\d[a-z0-9]{2,4})\b", title.lower())
+    return f"{code.group(1)[:4]} {code.group(2)}" if code else re.sub(r"\W+", " ", title.lower()).strip()
+
+
+def _without_repeats(lists: list[list[dict]]) -> list[list[dict]]:
+    """When two lists hold mostly the same classes (e.g. a copied "Courses" gallery and a new "Classes"
+    table), keep only the one whose class pages hold more (the notes are there)."""
+    keep = list(lists)
+    for a in lists:
+        for b in lists:
+            if a is b or a not in keep or b not in keep:
+                continue
+            shared = {_course_key(c["title"]) for c in a} & {_course_key(c["title"]) for c in b}
+            if len(shared) >= max(1, math.ceil(min(len(a), len(b)) / 2)):
+                keep.remove(min((a, b), key=lambda entries: (sum(c["blocks"] for c in entries), -lists.index(entries))))
+    return keep
 
 
 def _has_course_columns(table_id: str) -> bool:
@@ -203,6 +247,8 @@ def _about_person(by_id: dict, nodes: list[dict], person: dict, class_start: int
         line = f"   C{class_start + i}: {c['title']}"
         if node.get("props"):
             line += f" [{node['props']}]"
+        if c.get("inside"):
+            line += f" — inside: {c['inside'][:160]}"
         if recent:
             line += " (recent lectures: " + ", ".join(recent) + ")"
         lines.append(line)

@@ -83,6 +83,8 @@ class FakeNotion:
             H("etimes"): {"Name": {"type": "title"}, "Location": {"type": "rich_text"}},
             H("eassess"): {"Name": {"type": "title"}},
         }
+        self.children: dict[str, list] = {}  # page id (normalized) -> its blocks
+        self.calls: list[str] = []           # every request, to check what's cached
         self.created: list[dict] = []    # bodies of POST /pages
         self.appended: list[tuple] = []  # (block id, children)
 
@@ -91,6 +93,9 @@ class FakeNotion:
 
     def request(self, method, path, body=None, version=notion.VERSION):
         parts = path.split("?")[0].strip("/").split("/")
+        self.calls.append(f"{method} {path}")
+        if parts[0] == "blocks" and len(parts) == 3 and method == "GET":  # what's on a page
+            return {"results": self.children.get(notion.normalize_id(parts[1]), []), "has_more": False}
         if path == "/search":
             return {"results": self.search, "has_more": False}
         if parts[0] == "blocks" and len(parts) == 2:  # resolving a block's parent
@@ -142,6 +147,13 @@ class OwnWorkspace(FakeNotion):
         self.search, self.schemas = search, schemas
 
 
+def text(kind, content):
+    """A block, e.g. text("heading_2", "Week 1") or text("child_page", "Topics")."""
+    if kind in ("child_page", "child_database"):
+        return {"type": kind, "id": H(content), kind: {"title": content}}
+    return {"type": kind, kind: {"rich_text": [{"plain_text": content}]}}
+
+
 def efrain_workspace() -> OwnWorkspace:
     """Efrain copied his page into his own Notion and shared just that top page with his key."""
     return OwnWorkspace([
@@ -182,7 +194,7 @@ class FakeAI:
         if "which student" in system:
             lecture = prompt.split("\nP0.")[0].lower()  # the lecture's part, before the list of people
             for subject, name, cls_start in (("discrete", "Arshaan", "Discrete"), ("management", "Ryan", "Intro to Management"),
-                                             ("sociology", "Efrain", "SOCSCI")):
+                                             ("sociology", "Efrain", "SOCSCI"), ("psychology", "Ryan", ".*Psychology")):
                 person = re.search(rf"^P(\d+)\. {name}", prompt, re.M)
                 cls = re.search(rf"^   C(\d+): {cls_start}", prompt, re.M)
                 if subject in lecture and person and cls:

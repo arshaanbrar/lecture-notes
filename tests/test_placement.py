@@ -154,3 +154,27 @@ def test_generic_class_names_and_planners_dont_attract_lectures(fake_notion, fak
     best = plan["candidates"][plan["best"]]
     assert notion.same_id(best["target_id"], H("ryan"))  # still his own page, where his lectures are
     assert not any(notion.same_id(c["target_id"], H("upcoming")) for c in plan["candidates"])
+
+
+def test_whats_inside_a_class_tells_classes_named_class_1_2_3_apart(fake_notion, fake_ai):
+    from tests.fakes import text
+    fake_notion.search += [
+        {"object": "page", "id": H(f"class{i}"), "parent": {"type": "database_id", "database_id": H("r_classes")},
+         "icon": None, "properties": {"Name": {"type": "title", "title": [{"plain_text": f"class {i}"}]}}}
+        for i in (1, 3)]
+    fake_notion.children[notion.normalize_id(H("class1"))] = [text("heading_1", "CCT109 Contemporary Communication Technologies")]
+    # class 3 only holds a "Topics" page: what's in there is read too.
+    fake_notion.children[notion.normalize_id(H("class3"))] = [text("child_page", "Topics")]
+    fake_notion.children[notion.normalize_id(H("Topics"))] = [text("bulleted_list_item", "PSY100 Introduction to Psychology")]
+    guess = placement.guess_owner("Memory", "A psychology lecture on memory", only_person_id=H("ryan"))
+    assert guess["class_id"] == H("class3")
+    prompt = fake_ai.prompts[-1]
+    assert "class 1 — inside: CCT109 Contemporary Communication Technologies" in prompt
+    assert "class 3 — inside: Topics; PSY100 Introduction to Psychology" in prompt
+
+
+def test_the_class_list_is_looked_up_once_then_reused(fake_notion, fake_ai):
+    placement.find_classes(H("efrain"))
+    before = len(fake_notion.calls)
+    placement.find_classes(H("efrain"))
+    assert len(fake_notion.calls) == before
