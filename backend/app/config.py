@@ -94,6 +94,10 @@ def people_mode() -> bool:
     return bool(_env("PEOPLE"))
 
 
+# Optional: YouTube cookies (the contents of a cookies.txt), for when YouTube blocks downloads from this
+# server. See README → YouTube links. Use a spare Google account: YouTube may flag accounts used this way.
+YOUTUBE_COOKIES = os.getenv("YOUTUBE_COOKIES", "").strip()
+
 # Optional shared password so strangers can't use up your free quotas. Empty = no password.
 APP_PASSWORD = _env("APP_PASSWORD")
 

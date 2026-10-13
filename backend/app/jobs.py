@@ -166,17 +166,24 @@ def _run(job: Job, workdir: Path, options: Options, path: Path | None, url: str 
             job.update("reading", "Reading the document…")
             text = documents.full_text(path, warn, progress)
         else:
+            got = None
             if url:
                 job.update("downloading", "Downloading audio from the link…")
-                path, title = audio.download(url, workdir)
-                job.label = title
-            job.update("converting", "Preparing audio…")
-            clean = audio.normalize(path, workdir)
+                got = audio.download(url, workdir)
+                path, job.label = got.path, got.title
+            if got and got.captions:
+                # YouTube wouldn't give this server the audio, but the video has captions: use those.
+                text = got.captions
+                warn("YouTube didn't let the server download this video's audio, so its captions were used as "
+                     "the transcript instead.")
+            else:
+                job.update("converting", "Preparing audio…")
+                clean = audio.normalize(path, workdir)
 
-            job.update("transcribing", "Transcribing…")
-            text = transcribe.transcribe(clean, workdir, progress)
-            if not text.strip():
-                raise AppError("No speech was detected in the audio.")
+                job.update("transcribing", "Transcribing…")
+                text = transcribe.transcribe(clean, workdir, progress)
+                if not text.strip():
+                    raise AppError("No speech was detected in the audio.")
         job.transcript = text
         placing = _start_placement(job, text, options)
 

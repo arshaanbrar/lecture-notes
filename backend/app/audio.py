@@ -1,8 +1,11 @@
 """Audio helpers: download from links (yt-dlp) and convert/split with ffmpeg."""
 
+import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import yt_dlp
 
 from . import config
@@ -55,8 +58,24 @@ def split(path: Path, workdir: Path, seconds: int) -> list[Path]:
     return sorted(workdir.glob("chunk_*.mp3"))
 
 
-def download(url: str, workdir: Path) -> tuple[Path, str]:
-    """Download the audio from a link (YouTube, Vimeo, direct .mp3/.mp4 URLs, and ~1000 other sites)."""
+# YouTube asks cloud servers (like this one on Render) to "sign in to confirm you're not a bot". yt-dlp can
+# ask YouTube as different YouTube apps, and the check doesn't hit them all the same, so after the usual
+# way these are tried in turn.
+YOUTUBE_CLIENTS = ["tv_simply", "web_embedded", "mweb", "android_vr", "ios", "tv", "web_safari"]
+
+
+@dataclass
+class Download:
+    path: Path | None  # the audio, or None when only the captions could be had
+    title: str
+    captions: str = ""  # the video's own captions, used as the transcript when the audio was blocked
+
+
+def _is_youtube(url: str) -> bool:
+    return bool(re.search(r"(^|\.|//)(youtube\.com|youtu\.be)/", url))
+
+
+def _ydl_options(workdir: Path, client: str | None, cookies: Path | None, download: bool) -> dict:
     opts = {
         "format": "bestaudio/best",
         "outtmpl": str(workdir / "download.%(ext)s"),
@@ -64,17 +83,90 @@ def download(url: str, workdir: Path) -> tuple[Path, str]:
         "quiet": True,
         "no_warnings": True,
         "max_filesize": config.MAX_UPLOAD_MB * 1024 * 1024,
+        "skip_download": not download,
     }
+    if client:
+        opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+    if cookies:
+        opts["cookiefile"] = str(cookies)
+    return opts
+
+
+def download(url: str, workdir: Path) -> Download:
+    """The audio from a link (YouTube, Vimeo, direct .mp3/.mp4 links and ~1000 other sites). For YouTube,
+    if the audio can't be had from this server, the video's own captions instead (Download.captions)."""
+    youtube = _is_youtube(url)
+    cookies = None
+    if youtube and config.YOUTUBE_COOKIES:
+        cookies = workdir / "youtube-cookies.txt"
+        cookies.write_text(config.YOUTUBE_COOKIES)
+    attempts = [None] + (YOUTUBE_CLIENTS if youtube else [])
+    first_error, captions = "", None
+    for client in attempts:
+        try:
+            with yt_dlp.YoutubeDL(_ydl_options(workdir, client, cookies, True)) as ydl:
+                info = ydl.extract_info(url, download=True)
+                path = Path(ydl.prepare_filename(info))
+        except yt_dlp.utils.DownloadError as e:
+            first_error = first_error or str(e).replace("ERROR: ", "").strip()
+            if youtube and captions is None:
+                captions = _captions(url, workdir, client, cookies)
+            continue
+        if not path.exists():
+            found = sorted(workdir.glob("download.*"))
+            if not found:
+                raise AppError("Couldn't download that link (it may be private or too large).")
+            path = found[0]
+        return Download(path, info.get("title") or "Linked recording")
+    if captions:
+        return captions
+    if youtube and re.search(r"not a bot|sign in to confirm", first_error, re.I):
+        raise AppError("YouTube is blocking downloads from this server right now (it asks cloud servers to "
+                       "sign in), and this video has no captions to use instead. Download the video and upload "
+                       "the file here: videos are shrunk to just their sound first, so it's quick.")
+    raise AppError(f"Couldn't download that link: {first_error[:300]}")
+
+
+def _captions(url: str, workdir: Path, client: str | None, cookies: Path | None) -> Download | None:
+    """The video's captions as plain text (its own, else YouTube's automatic ones), or None."""
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            path = Path(ydl.prepare_filename(info))
-    except yt_dlp.utils.DownloadError as e:
-        msg = str(e).replace("ERROR: ", "").strip()
-        raise AppError(f"Couldn't download that link: {msg[:300]}")
-    if not path.exists():
-        found = sorted(workdir.glob("download.*"))
-        if not found:
-            raise AppError("Couldn't download that link (it may be private or too large).")
-        path = found[0]
-    return path, (info.get("title") or "Linked recording")
+        with yt_dlp.YoutubeDL(_ydl_options(workdir, client, cookies, False)) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError:
+        return None
+    for tracks in (info.get("subtitles") or {}, info.get("automatic_captions") or {}):
+        lang = next((code for code in tracks if code in ("en", "en-US", "en-GB")), None) \
+            or next((code for code in tracks if code.startswith("en")), None)
+        formats = {f.get("ext"): f.get("url") for f in tracks.get(lang, []) if f.get("url")}
+        if not formats:
+            continue
+        try:
+            if formats.get("json3"):
+                text = _json3_text(httpx.get(formats["json3"], timeout=30).json())
+            elif formats.get("vtt"):
+                text = vtt_text(httpx.get(formats["vtt"], timeout=30).text)
+            else:
+                continue
+        except (httpx.HTTPError, ValueError):
+            continue
+        if len(text.split()) >= 20:
+            return Download(None, info.get("title") or "Linked recording", text)
+    return None
+
+
+def _json3_text(data: dict) -> str:
+    words = "".join(seg.get("utf8", "") for event in data.get("events", []) for seg in event.get("segs") or [])
+    return re.sub(r"\s+", " ", words).strip()
+
+
+def vtt_text(vtt: str) -> str:
+    """Plain text from WebVTT captions: no header, timings or tags, and no lines repeated (YouTube's
+    automatic captions repeat each line as the next one scrolls in)."""
+    lines = []
+    for line in vtt.splitlines():
+        line = re.sub(r"<[^>]+>", "", line).strip()
+        if not line or line == "WEBVTT" or "-->" in line or re.match(r"^(Kind|Language|NOTE)\b", line):
+            continue
+        if not lines or lines[-1] != line:
+            lines.append(line)
+    return re.sub(r"\s+", " ", " ".join(lines)).strip()
