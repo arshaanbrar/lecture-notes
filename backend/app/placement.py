@@ -135,9 +135,12 @@ def find_classes(person_id: str) -> list[dict]:
     nodes = notion.page_tree()
     by_id = _by_id(nodes)
     tables = [n for n in nodes if n["type"] == "database" and _inside(by_id, n, person_id)]
+    # Tables named like a class list first, then unnamed ones (checked by their columns), then the rest;
+    # someone with lots of tables (planners, a "Topics" table in every class…) still has theirs found.
+    tables.sort(key=lambda t: 0 if COURSE_TABLE.search(t["title"]) else 1 if notion.is_generic_title(t["title"]) else 2)
 
     lists, seen = [], set()
-    for table in tables[:25]:
+    for table in tables[:80]:
         name = table["title"]
         if notion.is_generic_title(name):
             name = notion.data_source_label(table["id"]) or name
@@ -165,7 +168,7 @@ def find_classes(person_id: str) -> list[dict]:
     for entries in lists:
         for c in entries:
             c["inside"], c["blocks"] = contents.get(c["id"], ("", 0))
-    found = [c for entries in _without_repeats(lists) for c in entries]
+    found = [c for entries in _without_placeholders(_without_repeats(lists)) for c in entries]
     _classes_cache[cache_key] = (time.time(), found)
     return found
 
@@ -203,6 +206,16 @@ def _read_contents(page_ids: list[str]) -> dict[str, tuple[str, int]]:
         return {i: f.result() for i, f in futures.items()}
 
 
+PLACEHOLDER = re.compile(r"^(class|course|subject|module|unit)\s*\d+$", re.I)
+
+
+def _without_placeholders(lists: list[list[dict]]) -> list[list[dict]]:
+    """A template's empty list ("class 1", "class 2"…) next to a real list of classes: keep the real one."""
+    real = [entries for entries in lists
+            if sum(bool(PLACEHOLDER.match(c["title"].strip())) for c in entries) < len(entries) / 2]
+    return real or lists
+
+
 def _course_key(title: str) -> str:
     """The same class in two lists: "SOCIOL 1Z03-C02LEC (3918)" and "SOCIOL 1Z03" → "soci 1z03";
     "POLSCI 1AA3…" and "POLSC 1AA3" → "pols 1aa3". Otherwise the plain title."""
@@ -225,8 +238,7 @@ def _without_repeats(lists: list[list[dict]]) -> list[list[dict]]:
 
 
 def _has_course_columns(table_id: str) -> bool:
-    info = notion.table_info(table_id)
-    return bool(info) and sum(bool(COURSE_COLUMNS.search(c)) for c in info.get("columns", [])) >= 2
+    return sum(bool(COURSE_COLUMNS.search(c)) for c in notion.table_columns(table_id)) >= 2
 
 
 def forget_cached() -> None:

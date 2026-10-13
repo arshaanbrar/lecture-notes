@@ -1,5 +1,5 @@
 from backend.app import config, notion, placement
-from tests.fakes import H
+from tests.fakes import D, H, P, page, table
 
 
 def names(people):
@@ -197,3 +197,17 @@ def test_the_rows_of_a_table_inside_a_class_say_what_it_is(fake_notion, fake_ai)
     guess = placement.guess_owner("Memory", "A psychology lecture on memory", only_person_id=H("ryan"))
     assert guess["class_id"] == H("class5")
     assert "class 5 — inside: Topics; Classical conditioning; Memory and forgetting" in fake_ai.prompts[-1]
+
+
+def test_the_real_class_list_is_found_among_many_tables_and_beats_a_placeholder_one(fake_notion, fake_ai):
+    # Ryan's new Notion: a "Classes" table of placeholders ("class 1"…, a template), lots of other tables
+    # (a "Topics" table in every class page, planners…), and his real classes in an unnamed table.
+    extra = [table(f"tbl{i}", f"Topics {i}", P("r_uni")) for i in range(40)]
+    fake_notion.search[:0] = extra  # Notion lists them before the real class table
+    fake_notion.search += [table("placeholders", "Classes", P("r_uni")),
+                           *[page(f"ph{i}", f"class {i}", D("placeholders")) for i in range(1, 8)]]
+    fake_notion.schemas[H("placeholders")] = {"Name": {"type": "title"}, "Course Code": {"type": "rich_text"}}
+    for i in range(40):
+        fake_notion.schemas[H(f"tbl{i}")] = {"Name": {"type": "title"}}
+    found = [c["title"] for c in placement.find_classes(H("ryan"))]
+    assert found == ["CSC108", "Pshycology", "Intro to Management functions"]

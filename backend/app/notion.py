@@ -372,6 +372,27 @@ def table_entries(database_id: str) -> list[dict]:
         return []
 
 
+def table_columns(table_id: str) -> list[str]:
+    """A table's column names: from the table itself, or, when Notion won't open it the old way, from
+    its data source (newer API). Cached for a few minutes."""
+    info = table_info(table_id)
+    if info:
+        return info.get("columns", [])
+    cache, key = _cache("tables"), "columns:" + normalize_id(table_id)
+    hit = cache.get(key)
+    if hit and time.time() - hit[0] < CACHE_SECONDS * 10:
+        return hit[1]
+    columns: list[str] = []
+    for source in [s for s in _data_sources(table_id) if s.get("id")][:2]:
+        try:
+            columns += list(_request("GET", f"/data_sources/{source['id']}", version=DATA_SOURCES_VERSION)
+                            .get("properties", {}))
+        except AppError:
+            continue
+    cache[key] = (time.time(), columns)
+    return columns
+
+
 def table_info(table_id: str) -> dict | None:
     """The columns of a table we can add entries to, or None if Notion won't let us read it."""
     key = normalize_id(table_id)
