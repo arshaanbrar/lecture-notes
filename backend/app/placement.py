@@ -170,6 +170,30 @@ def find_classes(person_id: str) -> list[dict]:
     return found
 
 
+def class_info(class_id: str) -> dict:
+    nodes = notion.page_tree()
+    by_id = _by_id(nodes)
+    node = _node(by_id, class_id) or {}
+    blocks = []
+    try:
+        children, _ = notion._children(class_id)
+    except AppError as e:
+        children = []
+        blocks.append({"error": str(e)})
+    for b in children[:20]:
+        info = {"type": b.get("type"), "text": notion._block_text(b)}
+        if b.get("type") == "child_database":
+            info["sources"] = [s.get("name") for s in notion._data_sources(b["id"])]
+            info["rows"] = [e["title"] for e in notion.table_entries(b["id"])[:10]]
+        blocks.append(info)
+    return {
+        "title": node.get("title"), "fields": node.get("props", ""),
+        "on_the_page": blocks,
+        "inside_pages": [n["title"] for n in nodes if notion.same_id(n.get("parent"), class_id)][:10],
+        "linked_notes": [n["title"] for n in nodes if any(notion.same_id(l, class_id) for l in n.get("links", []))][:10],
+    }
+
+
 def _read_contents(page_ids: list[str]) -> dict[str, tuple[str, int]]:
     """notion.page_contents for many pages, a few at a time (each with this request's Notion account)."""
     if not page_ids:

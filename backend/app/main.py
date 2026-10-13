@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import secrets
 import shutil
@@ -64,7 +65,8 @@ api = APIRouter(prefix="/api", dependencies=[Depends(current_person)])
 @app.get("/healthz")
 def healthz():
     # `busy`: notes being made right now, so an update can wait until nobody's mid-way.
-    return {"ok": True, "busy": jobs.busy()}
+    # `version`: the commit that's running (Render sets it), to tell when an update is live.
+    return {"ok": True, "busy": jobs.busy(), "version": os.getenv("RENDER_GIT_COMMIT", "")[:7]}
 
 
 @public.get("/config")
@@ -262,6 +264,17 @@ def notion_classes(body: ClassesBody):
     if not notion.normalize_id(body.person_id):
         raise HTTPException(status_code=400, detail="Pick a person first.")
     return placement.classes(body.person_id, body.note_title, body.summary, body.recorded_at)
+
+
+class ClassInfoBody(BaseModel):
+    class_id: str = Field(max_length=64)
+
+
+@api.post("/notion/class-info")
+def notion_class_info(body: ClassInfoBody):
+    """What the site can see of one class in the signed-in person's Notion (to check why a guess can't
+    tell classes apart): its fields, what's on its page, the tables on it, and notes linked to it."""
+    return placement.class_info(body.class_id)
 
 
 class PlanBody(NoteContext):
