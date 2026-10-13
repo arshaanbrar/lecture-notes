@@ -265,7 +265,8 @@ def _block_text(block: dict) -> str:
     kind = block.get("type", "")
     data = block.get(kind) or {}
     if kind in ("child_page", "child_database"):
-        return data.get("title", "").strip()
+        title = data.get("title", "").strip()
+        return "" if is_generic_title(title) else title  # "Untitled" / "New database" say nothing
     return "".join(t.get("plain_text", "") for t in data.get("rich_text") or []).strip()
 
 

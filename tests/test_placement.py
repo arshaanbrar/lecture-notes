@@ -211,3 +211,10 @@ def test_the_real_class_list_is_found_among_many_tables_and_beats_a_placeholder_
         fake_notion.schemas[H(f"tbl{i}")] = {"Name": {"type": "title"}}
     found = [c["title"] for c in placement.find_classes(H("ryan"))]
     assert found == ["CSC108", "Pshycology", "Intro to Management functions"]
+
+
+def test_unnamed_tables_on_a_class_page_are_left_out_of_its_contents():
+    from tests.fakes import text
+    assert notion._block_text(text("child_database", "Untitled")) == ""
+    assert notion._block_text(text("child_database", "New database")) == ""
+    assert notion._block_text(text("child_database", "Topics")) == "Topics"
